@@ -8,6 +8,11 @@ The Pico itself does **not** store historical logs or CSV files. Historical data
 
 ---
 
+## Live Dashboard
+
+![Live Dashboard](docs/images/dashboard.png)
+
+
 ## Features
 
 ### Network Monitoring
