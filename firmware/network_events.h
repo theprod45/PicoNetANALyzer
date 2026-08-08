@@ -4,49 +4,80 @@
 #include <stdbool.h>
 #include <stdint.h>
 
-#define BSSID_MAX_LEN 32
+#define EVENT_BSSID_LEN 32
+#define EVENT_GATEWAY_LEN 32
+
 
 typedef struct
 {
     /*
-     * Have we seen our first valid BSSID yet?
+     * Access-point state.
      */
-    bool bssid_initialized;
+    bool ap_initialized;
+
+    char current_bssid[EVENT_BSSID_LEN];
+    char previous_bssid[EVENT_BSSID_LEN];
+
+    int current_channel;
+    int previous_channel;
+
 
     /*
-     * True only for the sample where a
-     * BSSID change was detected.
+     * BSSID-change tracking.
      */
     bool bssid_changed;
 
-    /*
-     * Current access point.
-     */
-    char current_bssid[BSSID_MAX_LEN];
-
-    /*
-     * Access point used before the most
-     * recent change.
-     */
-    char previous_bssid[BSSID_MAX_LEN];
-
-    /*
-     * Number of BSSID changes observed
-     * since boot.
-     */
     uint32_t bssid_change_count;
+    uint64_t last_bssid_change_ms;
+
 
     /*
-     * Device uptime when the most recent
-     * BSSID change occurred.
+     * Channel-change tracking.
      */
-    uint64_t last_bssid_change_ms;
+    bool channel_changed;
+
+    uint32_t channel_change_count;
+    uint64_t last_channel_change_ms;
+
+
+    /*
+     * Gateway tracking.
+     */
+    bool gateway_initialized;
+
+    char current_gateway[EVENT_GATEWAY_LEN];
+    char previous_gateway[EVENT_GATEWAY_LEN];
+
+    bool gateway_changed;
+
+    uint32_t gateway_change_count;
+    uint64_t last_gateway_change_ms;
+
+
+    /*
+     * Weak-signal tracking.
+     */
+    bool weak_signal_active;
+    bool weak_signal_event;
+
+    uint32_t weak_signal_event_count;
+    uint64_t last_weak_signal_ms;
+
+
+    /*
+     * High-latency tracking.
+     */
+    bool high_latency_active;
+    bool high_latency_event;
+
+    uint32_t high_latency_event_count;
+    uint64_t last_high_latency_ms;
 
 } network_events_t;
 
 
 /*
- * Initialize network event tracking.
+ * Initialize all event state.
  */
 void network_events_init(
     network_events_t *events
@@ -54,17 +85,57 @@ void network_events_init(
 
 
 /*
- * Feed the latest BSSID into the event detector.
- *
- * Returns:
- *
- * true  -> BSSID changed
- * false -> no change
+ * Clear event flags that should only remain true
+ * for one monitoring cycle.
  */
-bool network_events_update_bssid(
+void network_events_begin_sample(
+    network_events_t *events
+);
+
+
+/*
+ * Track BSSID and Wi-Fi channel.
+ */
+void network_events_update_ap(
     network_events_t *events,
-    const char *new_bssid,
+    const char *bssid,
+    int channel,
     uint64_t now_ms
 );
+
+
+/*
+ * Track default-gateway changes.
+ */
+void network_events_update_gateway(
+    network_events_t *events,
+    const char *gateway,
+    uint64_t now_ms
+);
+
+
+/*
+ * Track transitions into weak-signal state.
+ */
+void network_events_update_signal(
+    network_events_t *events,
+    int rssi,
+    int weak_threshold_dbm,
+    uint64_t now_ms
+);
+
+
+/*
+ * Track transitions into high-latency state.
+ *
+ * RTT < 0 means the probe failed.
+ */
+void network_events_update_latency(
+    network_events_t *events,
+    int rtt_ms,
+    int high_latency_threshold_ms,
+    uint64_t now_ms
+);
+
 
 #endif
