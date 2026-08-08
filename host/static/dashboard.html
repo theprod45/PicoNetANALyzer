@@ -1,0 +1,896 @@
+<!DOCTYPE html>
+
+<html lang="en">
+
+<head>
+
+    <meta charset="UTF-8">
+
+    <meta
+        name="viewport"
+        content="width=device-width, initial-scale=1.0"
+    >
+
+    <title>PicoNetANALyzer</title>
+
+
+    <style>
+
+        :root
+        {
+            color-scheme: dark;
+
+            --background: #0d1117;
+            --panel: #161b22;
+            --panel-light: #1f2630;
+
+            --border: #30363d;
+
+            --text: #e6edf3;
+            --muted: #8b949e;
+
+            --good: #3fb950;
+            --warning: #d29922;
+            --danger: #f85149;
+            --info: #58a6ff;
+        }
+
+
+        *
+        {
+            box-sizing: border-box;
+        }
+
+
+        body
+        {
+            margin: 0;
+
+            font-family:
+                Inter,
+                system-ui,
+                -apple-system,
+                BlinkMacSystemFont,
+                "Segoe UI",
+                sans-serif;
+
+            background: var(--background);
+            color: var(--text);
+        }
+
+
+        .container
+        {
+            max-width: 1500px;
+
+            margin: 0 auto;
+
+            padding: 24px;
+        }
+
+
+        header
+        {
+            display: flex;
+
+            justify-content: space-between;
+            align-items: center;
+
+            flex-wrap: wrap;
+
+            gap: 16px;
+
+            margin-bottom: 24px;
+        }
+
+
+        h1
+        {
+            margin: 0;
+
+            font-size: 28px;
+        }
+
+
+        .subtitle
+        {
+            margin-top: 5px;
+
+            color: var(--muted);
+        }
+
+
+        .live
+        {
+            display: inline-flex;
+
+            align-items: center;
+
+            gap: 8px;
+
+            color: var(--good);
+        }
+
+
+        .live-dot
+        {
+            width: 10px;
+            height: 10px;
+
+            border-radius: 50%;
+
+            background: var(--good);
+        }
+
+
+        .controls
+        {
+            display: flex;
+
+            gap: 10px;
+
+            align-items: center;
+
+            flex-wrap: wrap;
+        }
+
+
+        select,
+        button,
+        a.button
+        {
+            border: 1px solid var(--border);
+
+            background: var(--panel);
+
+            color: var(--text);
+
+            border-radius: 7px;
+
+            padding: 9px 12px;
+
+            font-size: 14px;
+        }
+
+
+        button,
+        a.button
+        {
+            cursor: pointer;
+
+            text-decoration: none;
+        }
+
+
+        button:hover,
+        a.button:hover
+        {
+            background: var(--panel-light);
+        }
+
+
+        .metrics
+        {
+            display: grid;
+
+            grid-template-columns:
+                repeat(
+                    auto-fit,
+                    minmax(180px, 1fr)
+                );
+
+            gap: 12px;
+
+            margin-bottom: 24px;
+        }
+
+
+        .metric
+        {
+            border: 1px solid var(--border);
+
+            background: var(--panel);
+
+            border-radius: 10px;
+
+            padding: 16px;
+        }
+
+
+        .metric-label
+        {
+            color: var(--muted);
+
+            font-size: 13px;
+
+            margin-bottom: 8px;
+        }
+
+
+        .metric-value
+        {
+            font-size: 24px;
+
+            font-weight: 600;
+        }
+
+
+        .metric-detail
+        {
+            color: var(--muted);
+
+            font-size: 12px;
+
+            margin-top: 7px;
+
+            overflow-wrap: anywhere;
+        }
+
+
+        .status-online
+        {
+            color: var(--good);
+        }
+
+
+        .status-warning
+        {
+            color: var(--warning);
+        }
+
+
+        .status-danger
+        {
+            color: var(--danger);
+        }
+
+
+        section
+        {
+            margin-top: 30px;
+        }
+
+
+        h2
+        {
+            margin-bottom: 14px;
+
+            font-size: 20px;
+        }
+
+
+        .charts
+        {
+            display: grid;
+
+            grid-template-columns:
+                repeat(
+                    auto-fit,
+                    minmax(420px, 1fr)
+                );
+
+            gap: 18px;
+        }
+
+
+        .chart-panel
+        {
+            border: 1px solid var(--border);
+
+            background: var(--panel);
+
+            border-radius: 10px;
+
+            padding: 15px;
+
+            height: 310px;
+        }
+
+
+        .chart-title
+        {
+            font-size: 14px;
+
+            margin-bottom: 8px;
+
+            color: var(--muted);
+        }
+
+
+        .chart-container
+        {
+            height: 250px;
+        }
+
+
+        .event-controls
+        {
+            display: flex;
+
+            gap: 10px;
+
+            margin-bottom: 12px;
+
+            flex-wrap: wrap;
+        }
+
+
+        .table-container
+        {
+            border: 1px solid var(--border);
+
+            border-radius: 10px;
+
+            overflow-x: auto;
+        }
+
+
+        table
+        {
+            width: 100%;
+
+            border-collapse: collapse;
+
+            background: var(--panel);
+        }
+
+
+        th,
+        td
+        {
+            text-align: left;
+
+            padding: 12px 14px;
+
+            border-bottom:
+                1px solid var(--border);
+
+            white-space: nowrap;
+        }
+
+
+        th
+        {
+            color: var(--muted);
+
+            font-size: 12px;
+
+            text-transform: uppercase;
+        }
+
+
+        td
+        {
+            font-size: 14px;
+        }
+
+
+        .severity-info
+        {
+            color: var(--info);
+        }
+
+
+        .severity-warning
+        {
+            color: var(--warning);
+        }
+
+
+        .severity-critical
+        {
+            color: var(--danger);
+        }
+
+
+        .details
+        {
+            white-space: normal;
+
+            min-width: 220px;
+        }
+
+
+        .footer
+        {
+            color: var(--muted);
+
+            margin-top: 30px;
+
+            font-size: 13px;
+        }
+
+
+        #error
+        {
+            color: var(--danger);
+
+            margin-bottom: 15px;
+
+            display: none;
+        }
+
+
+        @media
+        (
+            max-width: 700px
+        )
+        {
+            .container
+            {
+                padding: 14px;
+            }
+
+
+            .charts
+            {
+                grid-template-columns: 1fr;
+            }
+
+
+            .chart-panel
+            {
+                min-width: 0;
+            }
+        }
+
+    </style>
+
+
+    <script
+        src="https://cdn.jsdelivr.net/npm/chart.js@4.5.1/dist/chart.umd.min.js"
+        defer
+    ></script>
+
+    <script
+        src="/static/dashboard.js"
+        defer
+    ></script>
+
+</head>
+
+
+<body>
+
+<div class="container">
+
+
+    <header>
+
+        <div>
+
+            <h1>
+                PicoNetANALyzer
+            </h1>
+
+            <div class="subtitle">
+                Embedded Network Monitoring & Diagnostics
+            </div>
+
+        </div>
+
+
+        <div class="controls">
+
+            <div class="live">
+
+                <span class="live-dot"></span>
+
+                <span id="live-status">
+                    Live
+                </span>
+
+            </div>
+
+
+            <select
+                id="device-selector"
+                aria-label="Device"
+            >
+                <option>
+                    Loading devices...
+                </option>
+            </select>
+
+
+            <a
+                id="export-measurements"
+                class="button"
+                href="#"
+            >
+                Export Measurements
+            </a>
+
+
+            <a
+                id="export-events"
+                class="button"
+                href="#"
+            >
+                Export Events
+            </a>
+
+        </div>
+
+    </header>
+
+
+    <div id="error"></div>
+
+
+    <!-- ========================================================= -->
+    <!-- Current Metrics                                           -->
+    <!-- ========================================================= -->
+
+    <div class="metrics">
+
+
+        <div class="metric">
+
+            <div class="metric-label">
+                Status
+            </div>
+
+            <div
+                class="metric-value"
+                id="status-value"
+            >
+                --
+            </div>
+
+            <div
+                class="metric-detail"
+                id="status-time"
+            >
+                Waiting for data
+            </div>
+
+        </div>
+
+
+        <div class="metric">
+
+            <div class="metric-label">
+                Wi-Fi Signal
+            </div>
+
+            <div
+                class="metric-value"
+                id="rssi-value"
+            >
+                --
+            </div>
+
+            <div class="metric-detail">
+                RSSI
+            </div>
+
+        </div>
+
+
+        <div class="metric">
+
+            <div class="metric-label">
+                Internet RTT
+            </div>
+
+            <div
+                class="metric-value"
+                id="rtt-value"
+            >
+                --
+            </div>
+
+            <div
+                class="metric-detail"
+                id="rtt-range"
+            >
+                min / avg / max
+            </div>
+
+        </div>
+
+
+        <div class="metric">
+
+            <div class="metric-label">
+                Jitter
+            </div>
+
+            <div
+                class="metric-value"
+                id="jitter-value"
+            >
+                --
+            </div>
+
+            <div
+                class="metric-detail"
+                id="avg-jitter"
+            >
+                Average --
+            </div>
+
+        </div>
+
+
+        <div class="metric">
+
+            <div class="metric-label">
+                Packet Loss
+            </div>
+
+            <div
+                class="metric-value"
+                id="loss-value"
+            >
+                --
+            </div>
+
+            <div class="metric-detail">
+                Internet probes
+            </div>
+
+        </div>
+
+
+        <div class="metric">
+
+            <div class="metric-label">
+                Wi-Fi Channel
+            </div>
+
+            <div
+                class="metric-value"
+                id="channel-value"
+            >
+                --
+            </div>
+
+            <div
+                class="metric-detail"
+                id="bssid-value"
+            >
+                BSSID --
+            </div>
+
+        </div>
+
+
+        <div class="metric">
+
+            <div class="metric-label">
+                Gateway RTT
+            </div>
+
+            <div
+                class="metric-value"
+                id="gateway-rtt-value"
+            >
+                --
+            </div>
+
+            <div
+                class="metric-detail"
+                id="gateway-value"
+            >
+                Gateway --
+            </div>
+
+        </div>
+
+
+        <div class="metric">
+
+            <div class="metric-label">
+                Disconnects
+            </div>
+
+            <div
+                class="metric-value"
+                id="disconnect-value"
+            >
+                --
+            </div>
+
+            <div
+                class="metric-detail"
+                id="reconnect-value"
+            >
+                Reconnects --
+            </div>
+
+        </div>
+
+
+    </div>
+
+
+    <!-- ========================================================= -->
+    <!-- Graphs                                                    -->
+    <!-- ========================================================= -->
+
+    <section>
+
+        <h2>
+            Live Network Performance
+        </h2>
+
+
+        <div class="charts">
+
+
+            <div class="chart-panel">
+
+                <div class="chart-title">
+                    Internet RTT (ms)
+                </div>
+
+                <div class="chart-container">
+
+                    <canvas id="rtt-chart"></canvas>
+
+                </div>
+
+            </div>
+
+
+            <div class="chart-panel">
+
+                <div class="chart-title">
+                    Wi-Fi RSSI (dBm)
+                </div>
+
+                <div class="chart-container">
+
+                    <canvas id="rssi-chart"></canvas>
+
+                </div>
+
+            </div>
+
+
+            <div class="chart-panel">
+
+                <div class="chart-title">
+                    Jitter (ms)
+                </div>
+
+                <div class="chart-container">
+
+                    <canvas id="jitter-chart"></canvas>
+
+                </div>
+
+            </div>
+
+
+            <div class="chart-panel">
+
+                <div class="chart-title">
+                    Packet Loss (%)
+                </div>
+
+                <div class="chart-container">
+
+                    <canvas id="loss-chart"></canvas>
+
+                </div>
+
+            </div>
+
+
+        </div>
+
+    </section>
+
+
+    <!-- ========================================================= -->
+    <!-- Event Log                                                 -->
+    <!-- ========================================================= -->
+
+    <section>
+
+        <h2>
+            Network & Security Event Log
+        </h2>
+
+
+        <div class="event-controls">
+
+            <select
+                id="severity-filter"
+                aria-label="Severity"
+            >
+                <option value="">
+                    All severities
+                </option>
+
+                <option value="info">
+                    Info
+                </option>
+
+                <option value="warning">
+                    Warning
+                </option>
+
+                <option value="critical">
+                    Critical
+                </option>
+            </select>
+
+
+            <select
+                id="event-filter"
+                aria-label="Event type"
+            >
+                <option value="">
+                    All event types
+                </option>
+            </select>
+
+        </div>
+
+
+        <div class="table-container">
+
+            <table>
+
+                <thead>
+
+                    <tr>
+
+                        <th>
+                            Time
+                        </th>
+
+                        <th>
+                            Severity
+                        </th>
+
+                        <th>
+                            Event
+                        </th>
+
+                        <th>
+                            Details
+                        </th>
+
+                    </tr>
+
+                </thead>
+
+
+                <tbody id="event-table">
+
+                    <tr>
+
+                        <td colspan="4">
+                            Waiting for events...
+                        </td>
+
+                    </tr>
+
+                </tbody>
+
+            </table>
+
+        </div>
+
+    </section>
+
+
+    <div class="footer">
+
+        <span id="last-refresh">
+            Waiting for first refresh...
+        </span>
+
+    </div>
+
+
+</div>
+
+</body>
+
+</html>
