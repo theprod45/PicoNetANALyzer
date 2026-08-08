@@ -19,6 +19,12 @@
 #define RESPONSE_SIZE 1024
 
 
+/*
+ * ================================================================
+ * Data structures
+ * ================================================================
+ */
+
 typedef struct
 {
     char ssid[64];
@@ -32,18 +38,23 @@ typedef struct
 } wifi_info_t;
 
 
+typedef struct
+{
+    char ip_address[32];
+    char gateway[32];
+    char netmask[32];
+
+    bool valid;
+
+} network_info_t;
+
+
 /*
  * ================================================================
- * WizFi360 AT command interface
+ * WizFi360 AT interface
  * ================================================================
  */
 
-/*
- * Send an AT command to the WizFi360.
- *
- * The response is captured internally and is not printed
- * directly to USB.
- */
 static bool wizfi_command(
     const char *command,
     char *response,
@@ -51,7 +62,7 @@ static bool wizfi_command(
     uint32_t timeout_ms)
 {
     /*
-     * Flush any stale bytes.
+     * Remove stale UART bytes before sending a new command.
      */
     while (uart_is_readable(WIZ_UART))
     {
@@ -59,16 +70,15 @@ static bool wizfi_command(
     }
 
 
-    response[0] = '\0';
+    response[0] =
+        '\0';
 
 
-    /*
-     * Send command.
-     */
     uart_puts(
         WIZ_UART,
         command
     );
+
 
     uart_puts(
         WIZ_UART,
@@ -82,7 +92,8 @@ static bool wizfi_command(
         );
 
 
-    size_t pos = 0;
+    size_t pos =
+        0;
 
 
     while (!time_reached(timeout))
@@ -93,15 +104,22 @@ static bool wizfi_command(
                 uart_getc(WIZ_UART);
 
 
-            if (pos < response_size - 1)
+            if (
+                pos <
+                response_size - 1
+            )
             {
-                response[pos++] = c;
-                response[pos] = '\0';
+                response[pos++] =
+                    c;
+
+
+                response[pos] =
+                    '\0';
             }
 
 
             /*
-             * Successful command.
+             * Successful AT command.
              */
             if (
                 strstr(
@@ -120,7 +138,7 @@ static bool wizfi_command(
 
 
             /*
-             * Failed command.
+             * Failed AT command.
              */
             if (
                 strstr(
@@ -190,19 +208,17 @@ static bool connect_wifi(
 
 
 /*
- * Get:
- *
- * SSID
- * BSSID
- * Wi-Fi channel
- * RSSI
+ * Read current SSID/BSSID/channel/RSSI.
  */
 static wifi_info_t get_wifi_info(void)
 {
-    wifi_info_t info = {0};
+    wifi_info_t info =
+        {0};
 
 
-    char response[RESPONSE_SIZE];
+    char response[
+        RESPONSE_SIZE
+    ];
 
 
     if (!wizfi_command(
@@ -241,7 +257,8 @@ static wifi_info_t get_wifi_info(void)
 
     if (result == 4)
     {
-        info.valid = true;
+        info.valid =
+            true;
     }
 
 
@@ -251,29 +268,25 @@ static wifi_info_t get_wifi_info(void)
 
 /*
  * ================================================================
- * Gateway
+ * Generic response parsing
  * ================================================================
  */
 
-static bool get_gateway(
-    char *gateway,
-    size_t size)
+static bool extract_quoted_value(
+    const char *response,
+    const char *prefix,
+    char *output,
+    size_t output_size)
 {
-    char response[RESPONSE_SIZE];
-
-
-    if (!wizfi_command(
-            "AT+CIPSTA_CUR?",
-            response,
-            sizeof(response),
-            2000))
+    if (
+        response == NULL ||
+        prefix == NULL ||
+        output == NULL ||
+        output_size == 0
+    )
     {
         return false;
     }
-
-
-    const char *prefix =
-        "+CIPSTA_CUR:gateway:\"";
 
 
     char *start =
@@ -289,14 +302,51 @@ static bool get_gateway(
     }
 
 
-    start += strlen(prefix);
+    start +=
+        strlen(prefix);
 
 
-    char *end =
-        strchr(
-            start,
-            '"'
-        );
+    /*
+     * Skip whitespace.
+     */
+    while (
+        *start == ' ' ||
+        *start == '\t'
+    )
+    {
+        start++;
+    }
+
+
+    bool quoted =
+        *start == '"';
+
+
+    if (quoted)
+    {
+        start++;
+    }
+
+
+    char *end;
+
+
+    if (quoted)
+    {
+        end =
+            strchr(
+                start,
+                '"'
+            );
+    }
+    else
+    {
+        end =
+            strpbrk(
+                start,
+                "\r\n"
+            );
+    }
 
 
     if (end == NULL)
@@ -306,24 +356,226 @@ static bool get_gateway(
 
 
     size_t length =
-        (size_t)(end - start);
+        (size_t)(
+            end - start
+        );
 
 
-    if (length >= size)
+    if (
+        length >=
+        output_size
+    )
     {
         length =
-            size - 1;
+            output_size - 1;
     }
 
 
     memcpy(
-        gateway,
+        output,
         start,
         length
     );
 
 
-    gateway[length] = '\0';
+    output[length] =
+        '\0';
+
+
+    return true;
+}
+
+
+/*
+ * ================================================================
+ * Current station IP information
+ * ================================================================
+ */
+
+static network_info_t get_network_info(void)
+{
+    network_info_t info =
+        {0};
+
+
+    char response[
+        RESPONSE_SIZE
+    ];
+
+
+    if (!wizfi_command(
+            "AT+CIPSTA_CUR?",
+            response,
+            sizeof(response),
+            2000))
+    {
+        return info;
+    }
+
+
+    bool ip_ok =
+        extract_quoted_value(
+            response,
+            "+CIPSTA_CUR:ip:",
+            info.ip_address,
+            sizeof(info.ip_address)
+        );
+
+
+    bool gateway_ok =
+        extract_quoted_value(
+            response,
+            "+CIPSTA_CUR:gateway:",
+            info.gateway,
+            sizeof(info.gateway)
+        );
+
+
+    extract_quoted_value(
+        response,
+        "+CIPSTA_CUR:netmask:",
+        info.netmask,
+        sizeof(info.netmask)
+    );
+
+
+    info.valid =
+        ip_ok &&
+        gateway_ok;
+
+
+    return info;
+}
+
+
+/*
+ * ================================================================
+ * DNS server information
+ * ================================================================
+ */
+
+static bool get_primary_dns_server(
+    char *dns_server,
+    size_t dns_server_size)
+{
+    if (
+        dns_server == NULL ||
+        dns_server_size == 0
+    )
+    {
+        return false;
+    }
+
+
+    dns_server[0] =
+        '\0';
+
+
+    char response[
+        RESPONSE_SIZE
+    ];
+
+
+    if (!wizfi_command(
+            "AT+CIPDNS_CUR?",
+            response,
+            sizeof(response),
+            2000))
+    {
+        return false;
+    }
+
+
+    const char *prefix =
+        "+CIPDNS_CUR:";
+
+
+    char *start =
+        strstr(
+            response,
+            prefix
+        );
+
+
+    if (start == NULL)
+    {
+        return false;
+    }
+
+
+    start +=
+        strlen(prefix);
+
+
+    /*
+     * The documented response may contain a space:
+     *
+     * +CIPDNS_CUR: 1.1.1.1
+     */
+    while (
+        *start == ' ' ||
+        *start == '\t'
+    )
+    {
+        start++;
+    }
+
+
+    /*
+     * Also tolerate quoted firmware responses.
+     */
+    if (*start == '"')
+    {
+        start++;
+    }
+
+
+    char *end =
+        start;
+
+
+    while (
+        *end != '\0' &&
+        *end != '"' &&
+        *end != '\r' &&
+        *end != '\n'
+    )
+    {
+        end++;
+    }
+
+
+    if (end == start)
+    {
+        return false;
+    }
+
+
+    size_t length =
+        (size_t)(
+            end - start
+        );
+
+
+    if (
+        length >=
+        dns_server_size
+    )
+    {
+        length =
+            dns_server_size - 1;
+    }
+
+
+    memcpy(
+        dns_server,
+        start,
+        length
+    );
+
+
+    dns_server[length] =
+        '\0';
 
 
     return true;
@@ -337,15 +589,19 @@ static bool get_gateway(
  */
 
 /*
- * Returns:
+ * Return:
  *
  * >= 0 = RTT in milliseconds
- * -1   = timeout / failure
+ * -1   = failed / timeout
  */
 static int ping_host(
     const char *host)
 {
-    char response[RESPONSE_SIZE];
+    char response[
+        RESPONSE_SIZE
+    ];
+
+
     char command[128];
 
 
@@ -368,11 +624,9 @@ static int ping_host(
 
 
     /*
-     * Example successful response:
+     * Typical response contains:
      *
      * +21
-     *
-     * OK
      */
     char *plus =
         strchr(
@@ -387,13 +641,9 @@ static int ping_host(
     }
 
 
-    /*
-     * Reject something such as:
-     *
-     * +timeout
-     */
     if (!isdigit(
-            (unsigned char)plus[1]))
+            (unsigned char)
+            plus[1]))
     {
         return -1;
     }
@@ -407,38 +657,47 @@ static int ping_host(
 
 /*
  * ================================================================
- * DNS
+ * DNS resolution and DNS latency
  * ================================================================
  */
 
 /*
- * Resolve a hostname using the WizFi360's built-in
- * DNS resolver.
+ * DNS latency here measures the time taken for the
+ * WizFi360 AT+CIPDOMAIN request to complete.
  *
- * Example command:
- *
- * AT+CIPDOMAIN="example.com"
+ * This is not an ICMP ping to the DNS resolver.
  */
 static bool dns_resolve_host(
     const char *domain,
     char *resolved_ip,
-    size_t resolved_ip_size)
+    size_t resolved_ip_size,
+    int *latency_ms)
 {
-    char response[RESPONSE_SIZE];
-    char command[128];
-
-
     if (
         domain == NULL ||
         resolved_ip == NULL ||
-        resolved_ip_size == 0
+        resolved_ip_size == 0 ||
+        latency_ms == NULL
     )
     {
         return false;
     }
 
 
-    resolved_ip[0] = '\0';
+    resolved_ip[0] =
+        '\0';
+
+
+    *latency_ms =
+        -1;
+
+
+    char response[
+        RESPONSE_SIZE
+    ];
+
+
+    char command[128];
 
 
     snprintf(
@@ -449,18 +708,34 @@ static bool dns_resolve_host(
     );
 
 
-    if (!wizfi_command(
+    uint64_t start_us =
+        time_us_64();
+
+
+    bool success =
+        wizfi_command(
             command,
             response,
             sizeof(response),
-            5000))
+            5000
+        );
+
+
+    uint64_t end_us =
+        time_us_64();
+
+
+    if (!success)
     {
         return false;
     }
 
 
+    /*
+     * Verify a valid DNS result exists.
+     */
     const char *prefix =
-        "+CIPDOMAIN:\"";
+        "+CIPDOMAIN:";
 
 
     char *start =
@@ -476,27 +751,56 @@ static bool dns_resolve_host(
     }
 
 
-    start += strlen(prefix);
+    start +=
+        strlen(prefix);
+
+
+    while (
+        *start == ' ' ||
+        *start == '\t'
+    )
+    {
+        start++;
+    }
+
+
+    if (*start == '"')
+    {
+        start++;
+    }
 
 
     char *end =
-        strchr(
-            start,
-            '"'
-        );
+        start;
 
 
-    if (end == NULL)
+    while (
+        *end != '\0' &&
+        *end != '"' &&
+        *end != '\r' &&
+        *end != '\n'
+    )
+    {
+        end++;
+    }
+
+
+    if (end == start)
     {
         return false;
     }
 
 
     size_t length =
-        (size_t)(end - start);
+        (size_t)(
+            end - start
+        );
 
 
-    if (length >= resolved_ip_size)
+    if (
+        length >=
+        resolved_ip_size
+    )
     {
         length =
             resolved_ip_size - 1;
@@ -510,7 +814,20 @@ static bool dns_resolve_host(
     );
 
 
-    resolved_ip[length] = '\0';
+    resolved_ip[length] =
+        '\0';
+
+
+    /*
+     * Only record latency after confirming that DNS
+     * actually returned an address.
+     */
+    *latency_ms =
+        (int)(
+            (end_us - start_us)
+            /
+            1000ULL
+        );
 
 
     return true;
@@ -519,7 +836,7 @@ static bool dns_resolve_host(
 
 /*
  * ================================================================
- * Utility
+ * General helpers
  * ================================================================
  */
 
@@ -527,22 +844,22 @@ static uint64_t get_uptime_ms(void)
 {
     return
         time_us_64()
-        / 1000ULL;
+        /
+        1000ULL;
 }
 
 
-/*
- * Work out the overall network state.
- *
- * More fundamental failures are given priority over
- * performance warnings.
- */
 static const char *get_status(
     bool wifi_connected,
     int gateway_ping,
     int internet_ping,
     const network_events_t *events)
 {
+    /*
+     * Fundamental connectivity failures take priority
+     * over performance warnings.
+     */
+
     if (!wifi_connected)
     {
         return "DISCONNECTED";
@@ -555,48 +872,61 @@ static const char *get_status(
     }
 
 
-    if (events->internet_outage_active)
+    if (
+        events->
+        internet_outage_active
+    )
     {
         return "INTERNET_OUTAGE";
     }
 
 
-    /*
-     * A probe has failed but we haven't yet reached
-     * the consecutive-failure threshold required to
-     * declare a confirmed outage.
-     */
     if (internet_ping < 0)
     {
         return "INTERNET_ISSUE";
     }
 
 
-    if (events->dns_failure_active)
+    if (
+        events->
+        dns_failure_active
+    )
     {
         return "DNS_FAILURE";
     }
 
 
-    if (events->high_packet_loss_active)
+    if (
+        events->
+        high_packet_loss_active
+    )
     {
         return "HIGH_PACKET_LOSS";
     }
 
 
-    if (events->high_latency_active)
+    if (
+        events->
+        high_latency_active
+    )
     {
         return "HIGH_LATENCY";
     }
 
 
-    if (events->high_jitter_active)
+    if (
+        events->
+        high_jitter_active
+    )
     {
         return "HIGH_JITTER";
     }
 
 
-    if (events->weak_signal_active)
+    if (
+        events->
+        weak_signal_active
+    )
     {
         return "WEAK_SIGNAL";
     }
@@ -615,9 +945,7 @@ static const char *get_status(
 int main(void)
 {
     /*
-     * USB serial.
-     *
-     * telemetry.c writes structured NDJSON here.
+     * USB telemetry.
      */
     stdio_init_all();
 
@@ -626,11 +954,8 @@ int main(void)
 
 
     /*
-     * ============================================================
-     * WizFi360 UART
-     * ============================================================
+     * WizFi360 UART.
      */
-
     uart_init(
         WIZ_UART,
         115200
@@ -652,12 +977,11 @@ int main(void)
     sleep_ms(1000);
 
 
-    char response[RESPONSE_SIZE];
+    char response[
+        RESPONSE_SIZE
+    ];
 
 
-    /*
-     * Device startup.
-     */
     telemetry_emit_event_simple(
         get_uptime_ms(),
         "DEVICE_STARTED",
@@ -666,11 +990,8 @@ int main(void)
 
 
     /*
-     * ============================================================
-     * Verify WizFi360
-     * ============================================================
+     * Verify WizFi360.
      */
-
     if (!wizfi_command(
             "AT",
             response,
@@ -716,10 +1037,9 @@ int main(void)
         response,
         sizeof(response)))
     {
-        /*
-         * Don't generate one event every five seconds.
-         */
-        if (!initial_connect_failure_sent)
+        if (
+            !initial_connect_failure_sent
+        )
         {
             telemetry_emit_event_simple(
                 get_uptime_ms(),
@@ -746,29 +1066,7 @@ int main(void)
 
     /*
      * ============================================================
-     * Initial gateway
-     * ============================================================
-     */
-
-    char gateway[32] =
-        "Unknown";
-
-
-    if (!get_gateway(
-            gateway,
-            sizeof(gateway)))
-    {
-        snprintf(
-            gateway,
-            sizeof(gateway),
-            "Unknown"
-        );
-    }
-
-
-    /*
-     * ============================================================
-     * Network event subsystem
+     * Event subsystem
      * ============================================================
      */
 
@@ -781,21 +1079,80 @@ int main(void)
 
 
     /*
-     * Establish initial gateway as baseline.
+     * ============================================================
+     * Current network identity
+     * ============================================================
      */
-    if (
-        strcmp(
-            gateway,
-            "Unknown"
-        ) != 0
-    )
+
+    char gateway[32] =
+        "Unknown";
+
+
+    char current_ip[32] =
+        "Unknown";
+
+
+    char previous_ip[32] =
+        "";
+
+
+    bool ip_initialized =
+        false;
+
+
+    char dns_server[64] =
+        "Unknown";
+
+
+    /*
+     * Establish initial IP/gateway baseline.
+     */
+    network_info_t initial_network =
+        get_network_info();
+
+
+    if (initial_network.valid)
     {
+        snprintf(
+            current_ip,
+            sizeof(current_ip),
+            "%s",
+            initial_network.ip_address
+        );
+
+
+        snprintf(
+            previous_ip,
+            sizeof(previous_ip),
+            "%s",
+            initial_network.ip_address
+        );
+
+
+        ip_initialized =
+            true;
+
+
+        snprintf(
+            gateway,
+            sizeof(gateway),
+            "%s",
+            initial_network.gateway
+        );
+
+
         network_events_update_gateway(
             &events,
             gateway,
             get_uptime_ms()
         );
     }
+
+
+    get_primary_dns_server(
+        dns_server,
+        sizeof(dns_server)
+    );
 
 
     /*
@@ -836,7 +1193,7 @@ int main(void)
 
 
     /*
-     * Jitter statistics.
+     * Jitter.
      */
     int previous_internet_ping =
         -1;
@@ -855,7 +1212,7 @@ int main(void)
 
 
     /*
-     * Wi-Fi outage statistics.
+     * Wi-Fi outage tracking.
      */
     bool previous_wifi_connected =
         true;
@@ -890,6 +1247,13 @@ int main(void)
 
 
     /*
+     * Silence compiler warnings for state retained for
+     * future telemetry expansion.
+     */
+    (void)total_wifi_outage_ms;
+
+
+    /*
      * ============================================================
      * Main monitoring loop
      * ============================================================
@@ -897,16 +1261,6 @@ int main(void)
 
     while (true)
     {
-        /*
-         * Clear flags such as:
-         *
-         * BSSID_CHANGED
-         * HIGH_JITTER
-         * DNS_FAILURE
-         *
-         * They become true again only if a new event
-         * occurs during this monitoring cycle.
-         */
         network_events_begin_sample(
             &events
         );
@@ -921,7 +1275,7 @@ int main(void)
 
         /*
          * ========================================================
-         * Wi-Fi state
+         * Wi-Fi information
          * ========================================================
          */
 
@@ -934,7 +1288,7 @@ int main(void)
 
 
         /*
-         * Detect Wi-Fi disconnect edge.
+         * Disconnect edge.
          */
         if (
             !wifi_connected &&
@@ -961,11 +1315,8 @@ int main(void)
 
 
         /*
-         * ========================================================
-         * Automatic Wi-Fi reconnect
-         * ========================================================
+         * Automatic reconnect.
          */
-
         if (!wifi_connected)
         {
             reconnect_attempts++;
@@ -985,9 +1336,6 @@ int main(void)
 
             if (reconnect_result)
             {
-                /*
-                 * Verify actual association.
-                 */
                 wifi =
                     get_wifi_info();
 
@@ -999,7 +1347,7 @@ int main(void)
 
 
         /*
-         * Wi-Fi recovered.
+         * Wi-Fi recovery.
          */
         if (
             wifi_connected &&
@@ -1032,28 +1380,12 @@ int main(void)
                 "info",
                 last_reconnect_duration_ms
             );
-
-
-            /*
-             * DHCP information may have changed.
-             */
-            snprintf(
-                gateway,
-                sizeof(gateway),
-                "Unknown"
-            );
-
-
-            get_gateway(
-                gateway,
-                sizeof(gateway)
-            );
         }
 
 
         /*
          * ========================================================
-         * BSSID / Channel / RSSI
+         * Wi-Fi events
          * ========================================================
          */
 
@@ -1062,9 +1394,6 @@ int main(void)
             wifi.valid
         )
         {
-            /*
-             * Access point changes.
-             */
             network_events_update_ap(
                 &events,
                 wifi.bssid,
@@ -1085,7 +1414,9 @@ int main(void)
             }
 
 
-            if (events.channel_changed)
+            if (
+                events.channel_changed
+            )
             {
                 telemetry_emit_event_change_int(
                     get_uptime_ms(),
@@ -1097,9 +1428,6 @@ int main(void)
             }
 
 
-            /*
-             * Weak signal.
-             */
             network_events_update_signal(
                 &events,
                 wifi.rssi,
@@ -1108,7 +1436,9 @@ int main(void)
             );
 
 
-            if (events.weak_signal_event)
+            if (
+                events.weak_signal_event
+            )
             {
                 telemetry_emit_event_metric(
                     get_uptime_ms(),
@@ -1124,32 +1454,129 @@ int main(void)
 
         /*
          * ========================================================
-         * Gateway monitoring
+         * IP / Gateway information
          * ========================================================
          */
 
-        if (
-            strcmp(
-                gateway,
-                "Unknown"
-            ) != 0
-        )
+        if (wifi_connected)
         {
-            network_events_update_gateway(
-                &events,
-                gateway,
-                get_uptime_ms()
-            );
+            network_info_t network_info =
+                get_network_info();
 
 
-            if (events.gateway_changed)
+            if (network_info.valid)
             {
-                telemetry_emit_event_change_string(
-                    get_uptime_ms(),
-                    "GATEWAY_CHANGED",
-                    "warning",
-                    events.previous_gateway,
-                    events.current_gateway
+                /*
+                 * IP baseline or IP change.
+                 */
+                if (!ip_initialized)
+                {
+                    snprintf(
+                        current_ip,
+                        sizeof(current_ip),
+                        "%s",
+                        network_info.ip_address
+                    );
+
+
+                    snprintf(
+                        previous_ip,
+                        sizeof(previous_ip),
+                        "%s",
+                        network_info.ip_address
+                    );
+
+
+                    ip_initialized =
+                        true;
+                }
+                else if (
+                    strcmp(
+                        current_ip,
+                        network_info.ip_address
+                    ) != 0
+                )
+                {
+                    snprintf(
+                        previous_ip,
+                        sizeof(previous_ip),
+                        "%s",
+                        current_ip
+                    );
+
+
+                    snprintf(
+                        current_ip,
+                        sizeof(current_ip),
+                        "%s",
+                        network_info.ip_address
+                    );
+
+
+                    telemetry_emit_event_change_string(
+                        get_uptime_ms(),
+                        "IP_ADDRESS_CHANGED",
+                        "info",
+                        previous_ip,
+                        current_ip
+                    );
+                }
+
+
+                /*
+                 * Update gateway every cycle.
+                 *
+                 * This also allows real gateway changes to
+                 * be detected without requiring a reconnect.
+                 */
+                snprintf(
+                    gateway,
+                    sizeof(gateway),
+                    "%s",
+                    network_info.gateway
+                );
+
+
+                network_events_update_gateway(
+                    &events,
+                    gateway,
+                    get_uptime_ms()
+                );
+
+
+                if (
+                    events.gateway_changed
+                )
+                {
+                    telemetry_emit_event_change_string(
+                        get_uptime_ms(),
+                        "GATEWAY_CHANGED",
+                        "warning",
+                        events.previous_gateway,
+                        events.current_gateway
+                    );
+                }
+            }
+
+
+            /*
+             * Refresh primary DNS resolver.
+             */
+            char discovered_dns[64];
+
+
+            if (
+                get_primary_dns_server(
+                    discovered_dns,
+                    sizeof(discovered_dns)
+                )
+            )
+            {
+                snprintf(
+                    dns_server,
+                    sizeof(dns_server),
+                    "%s",
+                    discovered_dns
                 );
             }
         }
@@ -1157,7 +1584,7 @@ int main(void)
 
         /*
          * ========================================================
-         * Network probes
+         * Gateway + Internet probes
          * ========================================================
          */
 
@@ -1171,9 +1598,6 @@ int main(void)
 
         if (wifi_connected)
         {
-            /*
-             * Local gateway RTT.
-             */
             if (
                 strcmp(
                     gateway,
@@ -1188,9 +1612,6 @@ int main(void)
             }
 
 
-            /*
-             * Internet RTT.
-             */
             internet_ping =
                 ping_host(
                     INTERNET_TARGET
@@ -1200,17 +1621,8 @@ int main(void)
 
         /*
          * ========================================================
-         * Internet outage classification
+         * Internet outage detection
          * ========================================================
-         *
-         * Only classify the problem as an Internet outage
-         * when:
-         *
-         * Wi-Fi is connected
-         * AND
-         * gateway responds
-         *
-         * Otherwise the root cause is lower in the stack.
          */
 
         bool internet_test_eligible =
@@ -1227,7 +1639,9 @@ int main(void)
         );
 
 
-        if (events.internet_outage_event)
+        if (
+            events.internet_outage_event
+        )
         {
             telemetry_emit_event_simple(
                 get_uptime_ms(),
@@ -1237,32 +1651,24 @@ int main(void)
         }
 
 
-        if (events.internet_recovered_event)
+        if (
+            events.internet_recovered_event
+        )
         {
             telemetry_emit_event_duration(
                 get_uptime_ms(),
                 "INTERNET_RECOVERED",
                 "info",
-                events.last_internet_outage_duration_ms
+                events.
+                    last_internet_outage_duration_ms
             );
         }
 
 
         /*
          * ========================================================
-         * DNS monitoring
+         * DNS test + DNS latency
          * ========================================================
-         *
-         * DNS is tested only if raw IP Internet access
-         * already works.
-         *
-         * This distinguishes:
-         *
-         * INTERNET_OUTAGE
-         *
-         * from:
-         *
-         * DNS_FAILURE
          */
 
         bool dns_test_performed =
@@ -1273,10 +1679,18 @@ int main(void)
             false;
 
 
+        int dns_latency_ms =
+            -1;
+
+
         char resolved_ip[64] =
             "";
 
 
+        /*
+         * Only test DNS when ordinary IP connectivity
+         * is already confirmed.
+         */
         if (
             wifi_connected &&
             gateway_ping >= 0 &&
@@ -1291,7 +1705,8 @@ int main(void)
                 dns_resolve_host(
                     DNS_TEST_DOMAIN,
                     resolved_ip,
-                    sizeof(resolved_ip)
+                    sizeof(resolved_ip),
+                    &dns_latency_ms
                 );
 
 
@@ -1344,7 +1759,9 @@ int main(void)
         );
 
 
-        if (events.high_latency_event)
+        if (
+            events.high_latency_event
+        )
         {
             telemetry_emit_event_metric(
                 get_uptime_ms(),
@@ -1359,7 +1776,7 @@ int main(void)
 
         /*
          * ========================================================
-         * Failure statistics
+         * Failure counters
          * ========================================================
          */
 
@@ -1432,10 +1849,6 @@ int main(void)
          * ========================================================
          * Jitter
          * ========================================================
-         *
-         * Jitter is currently calculated as the absolute
-         * difference between consecutive successful RTT
-         * measurements.
          */
 
         if (internet_ping >= 0)
@@ -1470,9 +1883,6 @@ int main(void)
         }
         else
         {
-            /*
-             * Break consecutive RTT chain.
-             */
             current_jitter =
                 -1;
 
@@ -1491,16 +1901,14 @@ int main(void)
             average_jitter =
                 (float)total_jitter
                 /
-                (float)jitter_samples;
+                (float)
+                jitter_samples;
         }
 
 
         /*
-         * ========================================================
-         * High jitter event
-         * ========================================================
+         * High jitter.
          */
-
         network_events_update_jitter(
             &events,
             current_jitter,
@@ -1509,7 +1917,9 @@ int main(void)
         );
 
 
-        if (events.high_jitter_event)
+        if (
+            events.high_jitter_event
+        )
         {
             telemetry_emit_event_metric(
                 get_uptime_ms(),
@@ -1524,14 +1934,8 @@ int main(void)
 
         /*
          * ========================================================
-         * Rolling packet-loss monitoring
+         * Rolling packet loss
          * ========================================================
-         *
-         * Wi-Fi outages are excluded from this rolling
-         * Internet-loss window.
-         *
-         * The ordinary lifetime packet-loss statistic below
-         * still includes all failed Internet probes.
          */
 
         if (wifi_connected)
@@ -1546,7 +1950,9 @@ int main(void)
         }
 
 
-        if (events.high_packet_loss_event)
+        if (
+            events.high_packet_loss_event
+        )
         {
             telemetry_emit_event_metric(
                 get_uptime_ms(),
@@ -1554,7 +1960,8 @@ int main(void)
                 "warning",
                 "packet_loss_pct",
                 (int)
-                    events.current_packet_loss_window_pct,
+                    events.
+                    current_packet_loss_window_pct,
                 HIGH_PACKET_LOSS_THRESHOLD_PCT
             );
         }
@@ -1562,7 +1969,7 @@ int main(void)
 
         /*
          * ========================================================
-         * Lifetime packet loss
+         * Lifetime loss
          * ========================================================
          */
 
@@ -1573,7 +1980,8 @@ int main(void)
                 /
                 (float)samples
             )
-            * 100.0f;
+            *
+            100.0f;
 
 
         float gateway_loss =
@@ -1583,12 +1991,13 @@ int main(void)
                 /
                 (float)samples
             )
-            * 100.0f;
+            *
+            100.0f;
 
 
         /*
          * ========================================================
-         * Overall status
+         * Overall state
          * ========================================================
          */
 
@@ -1603,7 +2012,7 @@ int main(void)
 
         /*
          * ========================================================
-         * Structured measurement
+         * Measurement telemetry
          * ========================================================
          */
 
@@ -1641,6 +2050,12 @@ int main(void)
                     : -1,
 
 
+            .ip_address =
+                ip_initialized
+                    ? current_ip
+                    : "Unknown",
+
+
             .gateway =
                 gateway,
 
@@ -1651,6 +2066,18 @@ int main(void)
 
             .gateway_loss_pct =
                 gateway_loss,
+
+
+            .dns_server =
+                dns_server,
+
+
+            .dns_test_domain =
+                DNS_TEST_DOMAIN,
+
+
+            .dns_latency_ms =
+                dns_latency_ms,
 
 
             .internet_rtt_ms =
@@ -1740,21 +2167,12 @@ int main(void)
 
 
         /*
-         * ========================================================
-         * Save state for next monitoring cycle
-         * ========================================================
+         * Next-cycle state.
          */
-
         previous_wifi_connected =
             wifi_connected;
 
 
-        /*
-         * All historical storage happens on the laptop.
-         *
-         * The Pico only keeps small counters and event state
-         * in RAM.
-         */
         sleep_ms(
             MONITOR_INTERVAL_MS
         );

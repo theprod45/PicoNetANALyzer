@@ -1,23 +1,29 @@
 #include "telemetry.h"
-#include "config.h"
 
 #include <stdio.h>
 
+#include "config.h"
+
 
 /*
- * Print a string safely inside JSON quotes.
+ * ================================================================
+ * JSON helpers
+ * ================================================================
  */
+
 static void json_print_string(
     const char *value)
 {
     putchar('"');
 
+
     if (value != NULL)
     {
-        while (*value)
+        while (*value != '\0')
         {
             unsigned char c =
-                (unsigned char)*value++;
+                (unsigned char)*value;
+
 
             switch (c)
             {
@@ -25,29 +31,36 @@ static void json_print_string(
                     printf("\\\"");
                     break;
 
+
                 case '\\':
                     printf("\\\\");
                     break;
+
 
                 case '\n':
                     printf("\\n");
                     break;
 
+
                 case '\r':
                     printf("\\r");
                     break;
+
 
                 case '\t':
                     printf("\\t");
                     break;
 
-                default:
 
+                default:
+                    /*
+                     * JSON control characters must be escaped.
+                     */
                     if (c < 0x20)
                     {
                         printf(
                             "\\u%04x",
-                            c
+                            (unsigned int)c
                         );
                     }
                     else
@@ -57,8 +70,12 @@ static void json_print_string(
 
                     break;
             }
+
+
+            value++;
         }
     }
+
 
     putchar('"');
 }
@@ -73,8 +90,23 @@ static void json_print_nullable_int(
     }
     else
     {
-        printf("%d", value);
+        printf(
+            "%d",
+            value
+        );
     }
+}
+
+
+static void json_print_bool(
+    bool value)
+{
+    printf(
+        "%s",
+        value
+            ? "true"
+            : "false"
+    );
 }
 
 
@@ -84,186 +116,336 @@ static void print_common_header(
 {
     printf("{");
 
+
     printf(
-        "\"schema\":%d,",
+        "\"schema\":%d",
         TELEMETRY_SCHEMA_VERSION
     );
 
-    printf("\"device_id\":");
-    json_print_string(DEVICE_ID);
-    printf(",");
-
-    printf("\"type\":");
-    json_print_string(type);
-    printf(",");
 
     printf(
-        "\"uptime_ms\":%llu",
-        (unsigned long long)uptime_ms
+        ",\"device_id\":"
+    );
+
+    json_print_string(
+        DEVICE_ID
+    );
+
+
+    printf(
+        ",\"type\":"
+    );
+
+    json_print_string(
+        type
+    );
+
+
+    printf(
+        ",\"uptime_ms\":%llu",
+        (unsigned long long)
+        uptime_ms
     );
 }
 
 
+/*
+ * ================================================================
+ * Measurements
+ * ================================================================
+ */
+
 void telemetry_emit_measurement(
-    const telemetry_measurement_t *m)
+    const telemetry_measurement_t *measurement)
 {
+    if (measurement == NULL)
+    {
+        return;
+    }
+
+
     print_common_header(
         "measurement",
-        m->uptime_ms
+        measurement->uptime_ms
     );
 
-    printf(",\"status\":");
-    json_print_string(m->status);
 
-    printf(",\"ssid\":");
-    json_print_string(m->ssid);
+    /*
+     * Status.
+     */
+    printf(
+        ",\"status\":"
+    );
 
-    printf(",\"bssid\":");
-    json_print_string(m->bssid);
+    json_print_string(
+        measurement->status
+    );
+
+
+    /*
+     * Wi-Fi.
+     */
+    printf(
+        ",\"ssid\":"
+    );
+
+    json_print_string(
+        measurement->ssid
+    );
+
 
     printf(
-        ",\"channel\":%d",
-        m->channel
+        ",\"bssid\":"
     );
+
+    json_print_string(
+        measurement->bssid
+    );
+
 
     printf(
-        ",\"rssi_dbm\":%d",
-        m->rssi_dbm
+        ",\"channel\":"
     );
 
-    printf(",\"gateway\":");
-    json_print_string(m->gateway);
-
-
-    printf(",\"gateway_rtt_ms\":");
     json_print_nullable_int(
-        m->gateway_rtt_ms
+        measurement->channel
     );
+
+    printf(
+    	",\"rssi_dbm\":%d",
+    	measurement->rssi_dbm
+    ); 
+    /*
+     * IP / gateway.
+     */
+    printf(
+        ",\"ip_address\":"
+    );
+
+    json_print_string(
+        measurement->ip_address
+    );
+
+
+    printf(
+        ",\"gateway\":"
+    );
+
+    json_print_string(
+        measurement->gateway
+    );
+
+
+    printf(
+        ",\"gateway_rtt_ms\":"
+    );
+
+    json_print_nullable_int(
+        measurement->gateway_rtt_ms
+    );
+
 
     printf(
         ",\"gateway_loss_pct\":%.2f",
-        m->gateway_loss_pct
+        measurement->gateway_loss_pct
     );
 
 
-    printf(",\"internet_rtt_ms\":");
+    /*
+     * DNS.
+     */
+    printf(
+        ",\"dns_server\":"
+    );
+
+    json_print_string(
+        measurement->dns_server
+    );
+
+
+    printf(
+        ",\"dns_test_domain\":"
+    );
+
+    json_print_string(
+        measurement->dns_test_domain
+    );
+
+
+    printf(
+        ",\"dns_latency_ms\":"
+    );
+
     json_print_nullable_int(
-        m->internet_rtt_ms
+        measurement->dns_latency_ms
     );
 
 
-    printf(",\"min_rtt_ms\":");
+    /*
+     * Internet RTT.
+     */
+    printf(
+        ",\"internet_rtt_ms\":"
+    );
+
     json_print_nullable_int(
-        m->min_rtt_ms
+        measurement->internet_rtt_ms
     );
+
+
+    printf(
+        ",\"min_rtt_ms\":"
+    );
+
+    json_print_nullable_int(
+        measurement->min_rtt_ms
+    );
+
 
     printf(
         ",\"avg_rtt_ms\":%.2f",
-        m->avg_rtt_ms
+        measurement->avg_rtt_ms
     );
 
-    printf(",\"max_rtt_ms\":");
+
+    printf(
+        ",\"max_rtt_ms\":"
+    );
+
     json_print_nullable_int(
-        m->max_rtt_ms
+        measurement->max_rtt_ms
     );
 
 
-    printf(",\"jitter_ms\":");
+    /*
+     * Jitter.
+     */
+    printf(
+        ",\"jitter_ms\":"
+    );
+
     json_print_nullable_int(
-        m->jitter_ms
+        measurement->jitter_ms
     );
+
 
     printf(
         ",\"avg_jitter_ms\":%.2f",
-        m->avg_jitter_ms
+        measurement->avg_jitter_ms
     );
 
 
+    /*
+     * Packet loss.
+     */
     printf(
         ",\"packet_loss_pct\":%.2f",
-        m->packet_loss_pct
+        measurement->packet_loss_pct
+    );
+
+
+    /*
+     * Counters.
+     */
+    printf(
+        ",\"samples\":%u",
+        measurement->samples
     );
 
 
     printf(
-        ",\"samples\":%lu",
-        (unsigned long)m->samples
-    );
-
-    printf(
-        ",\"successful\":%lu",
-        (unsigned long)m->successful
-    );
-
-    printf(
-        ",\"failed\":%lu",
-        (unsigned long)m->failed
+        ",\"successful\":%u",
+        measurement->successful
     );
 
 
     printf(
-        ",\"disconnects\":%lu",
-        (unsigned long)m->disconnects
-    );
-
-    printf(
-        ",\"reconnects\":%lu",
-        (unsigned long)m->reconnects
-    );
-
-    printf(
-        ",\"reconnect_attempts\":%lu",
-        (unsigned long)m->reconnect_attempts
+        ",\"failed\":%u",
+        measurement->failed
     );
 
 
     printf(
-        ",\"bssid_changes\":%lu",
-        (unsigned long)m->bssid_changes
-    );
-
-    printf(
-        ",\"channel_changes\":%lu",
-        (unsigned long)m->channel_changes
-    );
-
-    printf(
-        ",\"gateway_changes\":%lu",
-        (unsigned long)m->gateway_changes
+        ",\"disconnects\":%u",
+        measurement->disconnects
     );
 
 
     printf(
-        ",\"weak_signal_events\":%lu",
-        (unsigned long)m->weak_signal_events
-    );
-
-    printf(
-        ",\"high_latency_events\":%lu",
-        (unsigned long)m->high_latency_events
+        ",\"reconnects\":%u",
+        measurement->reconnects
     );
 
 
     printf(
-        ",\"weak_signal_active\":%s",
-        m->weak_signal_active
-            ? "true"
-            : "false"
+        ",\"reconnect_attempts\":%u",
+        measurement->reconnect_attempts
     );
 
+
     printf(
-        ",\"high_latency_active\":%s",
-        m->high_latency_active
-            ? "true"
-            : "false"
+        ",\"bssid_changes\":%u",
+        measurement->bssid_changes
+    );
+
+
+    printf(
+        ",\"channel_changes\":%u",
+        measurement->channel_changes
+    );
+
+
+    printf(
+        ",\"gateway_changes\":%u",
+        measurement->gateway_changes
+    );
+
+
+    printf(
+        ",\"weak_signal_events\":%u",
+        measurement->weak_signal_events
+    );
+
+
+    printf(
+        ",\"high_latency_events\":%u",
+        measurement->high_latency_events
+    );
+
+
+    /*
+     * Active states.
+     */
+    printf(
+        ",\"weak_signal_active\":"
+    );
+
+    json_print_bool(
+        measurement->weak_signal_active
+    );
+
+
+    printf(
+        ",\"high_latency_active\":"
+    );
+
+    json_print_bool(
+        measurement->high_latency_active
     );
 
 
     printf("}\n");
 
+
     fflush(stdout);
 }
 
+
+/*
+ * ================================================================
+ * Events
+ * ================================================================
+ */
 
 void telemetry_emit_event_simple(
     uint64_t uptime_ms,
@@ -275,15 +457,32 @@ void telemetry_emit_event_simple(
         uptime_ms
     );
 
-    printf(",\"event\":");
-    json_print_string(event);
 
-    printf(",\"severity\":");
-    json_print_string(severity);
+    printf(
+        ",\"event\":"
+    );
 
-    printf(",\"details\":{}");
+    json_print_string(
+        event
+    );
+
+
+    printf(
+        ",\"severity\":"
+    );
+
+    json_print_string(
+        severity
+    );
+
+
+    printf(
+        ",\"details\":{}"
+    );
+
 
     printf("}\n");
+
 
     fflush(stdout);
 }
@@ -301,23 +500,48 @@ void telemetry_emit_event_change_string(
         uptime_ms
     );
 
-    printf(",\"event\":");
-    json_print_string(event);
 
-    printf(",\"severity\":");
-    json_print_string(severity);
+    printf(
+        ",\"event\":"
+    );
 
-    printf(",\"details\":{");
+    json_print_string(
+        event
+    );
 
-    printf("\"old\":");
-    json_print_string(old_value);
 
-    printf(",\"new\":");
-    json_print_string(new_value);
+    printf(
+        ",\"severity\":"
+    );
 
-    printf("}");
+    json_print_string(
+        severity
+    );
 
-    printf("}\n");
+
+    printf(
+        ",\"details\":{\"old\":"
+    );
+
+    json_print_string(
+        old_value
+    );
+
+
+    printf(
+        ",\"new\":"
+    );
+
+    json_print_string(
+        new_value
+    );
+
+
+    printf("}}");
+
+
+    printf("\n");
+
 
     fflush(stdout);
 }
@@ -335,19 +559,37 @@ void telemetry_emit_event_change_int(
         uptime_ms
     );
 
-    printf(",\"event\":");
-    json_print_string(event);
-
-    printf(",\"severity\":");
-    json_print_string(severity);
 
     printf(
-        ",\"details\":{\"old\":%d,\"new\":%d}",
+        ",\"event\":"
+    );
+
+    json_print_string(
+        event
+    );
+
+
+    printf(
+        ",\"severity\":"
+    );
+
+    json_print_string(
+        severity
+    );
+
+
+    printf(
+        ",\"details\":{"
+        "\"old\":%d,"
+        "\"new\":%d"
+        "}",
         old_value,
         new_value
     );
 
+
     printf("}\n");
+
 
     fflush(stdout);
 }
@@ -366,30 +608,45 @@ void telemetry_emit_event_metric(
         uptime_ms
     );
 
-    printf(",\"event\":");
-    json_print_string(event);
-
-    printf(",\"severity\":");
-    json_print_string(severity);
-
-    printf(",\"details\":{");
-
-    printf("\"metric\":");
-    json_print_string(metric);
 
     printf(
-        ",\"value\":%d",
-        value
+        ",\"event\":"
     );
 
+    json_print_string(
+        event
+    );
+
+
     printf(
-        ",\"threshold\":%d",
+        ",\"severity\":"
+    );
+
+    json_print_string(
+        severity
+    );
+
+
+    printf(
+        ",\"details\":{\"metric\":"
+    );
+
+    json_print_string(
+        metric
+    );
+
+
+    printf(
+        ",\"value\":%d"
+        ",\"threshold\":%d"
+        "}",
+        value,
         threshold
     );
 
-    printf("}");
 
     printf("}\n");
+
 
     fflush(stdout);
 }
@@ -406,18 +663,34 @@ void telemetry_emit_event_duration(
         uptime_ms
     );
 
-    printf(",\"event\":");
-    json_print_string(event);
 
-    printf(",\"severity\":");
-    json_print_string(severity);
+    printf(
+        ",\"event\":"
+    );
+
+    json_print_string(
+        event
+    );
+
+
+    printf(
+        ",\"severity\":"
+    );
+
+    json_print_string(
+        severity
+    );
+
 
     printf(
         ",\"details\":{\"duration_ms\":%llu}",
-        (unsigned long long)duration_ms
+        (unsigned long long)
+        duration_ms
     );
 
+
     printf("}\n");
+
 
     fflush(stdout);
 }

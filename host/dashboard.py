@@ -7,117 +7,111 @@ import os
 import sqlite3
 
 from pathlib import Path
-from typing import Generator
+from typing import Iterator
 
-from fastapi import FastAPI, HTTPException, Query
-from fastapi.responses import FileResponse, StreamingResponse
+from fastapi import (
+    FastAPI,
+    HTTPException,
+    Query,
+)
+
+from fastapi.responses import (
+    FileResponse,
+    StreamingResponse,
+)
+
 from fastapi.staticfiles import StaticFiles
 
 
-# ---------------------------------------------------------------------------
-# Paths
-# ---------------------------------------------------------------------------
+HOST_DIR = (
+    Path(__file__)
+    .resolve()
+    .parent
+)
 
-HOST_DIR = Path(__file__).resolve().parent
-PROJECT_ROOT = HOST_DIR.parent
-STATIC_DIR = HOST_DIR / "static"
+PROJECT_ROOT = (
+    HOST_DIR.parent
+)
 
-DEFAULT_DB_PATH = PROJECT_ROOT / "data" / "piconet.db"
+STATIC_DIR = (
+    HOST_DIR
+    / "static"
+)
+
+DEFAULT_DB = (
+    PROJECT_ROOT
+    / "data"
+    / "piconet.db"
+)
 
 DB_PATH = Path(
     os.environ.get(
         "PICONET_DB",
-        str(DEFAULT_DB_PATH)
+        str(DEFAULT_DB),
     )
 )
 
 
-# ---------------------------------------------------------------------------
-# FastAPI
-# ---------------------------------------------------------------------------
-
 app = FastAPI(
     title="PicoNetANALyzer Dashboard",
-    description=(
-        "Live monitoring and diagnostics API for "
-        "PicoNetANALyzer."
-    ),
-    version="0.1.0"
+    version="1.0",
 )
 
 
 app.mount(
     "/static",
     StaticFiles(
-        directory=str(STATIC_DIR)
+        directory=STATIC_DIR
     ),
-    name="static"
+    name="static",
 )
 
 
-# ---------------------------------------------------------------------------
-# Database
-# ---------------------------------------------------------------------------
-
-def database_exists() -> bool:
-    return DB_PATH.exists()
-
-
-def open_database() -> sqlite3.Connection:
-    """
-    Open SQLite in read-only/query mode.
-
-    collector.py is responsible for writing.
-    dashboard.py only reads.
-    """
-
-    if not database_exists():
+def open_database():
+    if not DB_PATH.exists():
         raise HTTPException(
             status_code=503,
             detail=(
-                f"Database does not exist: {DB_PATH}. "
-                "Start collector.py first."
-            )
+                f"Database does not exist: "
+                f"{DB_PATH}"
+            ),
         )
 
-    connection = sqlite3.connect(
+    conn = sqlite3.connect(
         DB_PATH,
-        timeout=5
+        timeout=5,
     )
 
-    connection.row_factory = sqlite3.Row
+    conn.row_factory = (
+        sqlite3.Row
+    )
 
-    connection.execute(
+    conn.execute(
         "PRAGMA query_only=ON"
     )
 
-    return connection
+    return conn
 
 
-def row_to_dict(
-    row: sqlite3.Row
-) -> dict:
+def row_to_dict(row):
+    if row is None:
+        return None
+
     return dict(row)
 
 
 def resolve_device(
-    connection: sqlite3.Connection,
-    requested_device: str | None
-) -> str | None:
-    """
-    If a device was explicitly requested, use it.
+    conn,
+    device_id=None,
+):
+    if device_id:
+        return device_id
 
-    Otherwise select the device that most recently
-    submitted a measurement.
-    """
-
-    if requested_device:
-        return requested_device
-
-    row = connection.execute(
+    row = conn.execute(
         """
         SELECT device_id
         FROM measurements
+        WHERE device_id IS NOT NULL
         ORDER BY record_id DESC
         LIMIT 1
         """
@@ -126,79 +120,44 @@ def resolve_device(
     if row is None:
         return None
 
-    return row["device_id"]
+    return row[
+        "device_id"
+    ]
 
-
-# ---------------------------------------------------------------------------
-# Frontend
-# ---------------------------------------------------------------------------
 
 @app.get("/")
-def dashboard():
-    """
-    Serve the browser dashboard.
-    """
-
-    dashboard_file = (
-        STATIC_DIR /
-        "dashboard.html"
-    )
-
-    if not dashboard_file.exists():
-        raise HTTPException(
-            status_code=500,
-            detail=(
-                "dashboard.html was not found"
-            )
-        )
-
+def index():
     return FileResponse(
-        dashboard_file
+        STATIC_DIR
+        / "dashboard.html"
     )
 
-
-# ---------------------------------------------------------------------------
-# Health
-# ---------------------------------------------------------------------------
 
 @app.get("/api/health")
 def health():
-    """
-    Basic dashboard/database health information.
-    """
-
     return {
         "status": "ok",
-        "database": str(DB_PATH),
-        "database_exists": database_exists()
+        "database": str(
+            DB_PATH
+        ),
+        "database_exists":
+            DB_PATH.exists(),
     }
 
 
-# ---------------------------------------------------------------------------
-# Devices
-# ---------------------------------------------------------------------------
-
 @app.get("/api/devices")
-def get_devices():
-    """
-    List every Pico device that has submitted
-    measurements.
-
-    This makes the dashboard ready for multiple
-    PicoNetANALyzer devices later.
-    """
-
-    connection = open_database()
+def devices():
+    conn = open_database()
 
     try:
-
-        rows = connection.execute(
+        rows = conn.execute(
             """
             SELECT
                 device_id,
-                MAX(received_at) AS last_seen,
-                COUNT(*) AS measurement_count
+                MAX(received_at)
+                    AS last_seen
             FROM measurements
+            WHERE device_id IS NOT NULL
             GROUP BY device_id
             ORDER BY last_seen DESC
             """
@@ -206,46 +165,36 @@ def get_devices():
 
         return {
             "devices": [
-                row_to_dict(row)
+                dict(row)
                 for row in rows
             ]
         }
 
     finally:
+        conn.close()
 
-        connection.close()
-
-
-# ---------------------------------------------------------------------------
-# Current status
-# ---------------------------------------------------------------------------
 
 @app.get("/api/status")
-def get_status(
-    device_id: str | None = None
+def status(
+    device_id: str | None = None,
 ):
-    """
-    Return the newest measurement for one device.
-    """
-
-    connection = open_database()
+    conn = open_database()
 
     try:
-
         device = resolve_device(
-            connection,
-            device_id
+            conn,
+            device_id,
         )
 
         if device is None:
-            return {
-                "available": False,
-                "device_id": None,
-                "measurement": None
-            }
+            raise HTTPException(
+                status_code=404,
+                detail=(
+                    "No measurement data available."
+                ),
+            )
 
-
-        row = connection.execute(
+        row = conn.execute(
             """
             SELECT *
             FROM measurements
@@ -253,66 +202,49 @@ def get_status(
             ORDER BY record_id DESC
             LIMIT 1
             """,
-            (device,)
+            (
+                device,
+            ),
         ).fetchone()
 
-
         if row is None:
-            return {
-                "available": False,
-                "device_id": device,
-                "measurement": None
-            }
+            raise HTTPException(
+                status_code=404,
+                detail=(
+                    f"No data for device {device}"
+                ),
+            )
 
-
-        return {
-            "available": True,
-            "device_id": device,
-            "measurement": row_to_dict(row)
-        }
+        return dict(row)
 
     finally:
+        conn.close()
 
-        connection.close()
-
-
-# ---------------------------------------------------------------------------
-# Measurement history
-# ---------------------------------------------------------------------------
 
 @app.get("/api/measurements")
-def get_measurements(
+def measurements(
     limit: int = Query(
-        default=300,
+        default=180,
         ge=1,
-        le=5000
+        le=5000,
     ),
-    device_id: str | None = None
+    device_id: str | None = None,
 ):
-    """
-    Return recent measurements.
-
-    Results are returned oldest -> newest so
-    graphing libraries can use them directly.
-    """
-
-    connection = open_database()
+    conn = open_database()
 
     try:
-
         device = resolve_device(
-            connection,
-            device_id
+            conn,
+            device_id,
         )
 
         if device is None:
             return {
                 "device_id": None,
-                "measurements": []
+                "measurements": [],
             }
 
-
-        rows = connection.execute(
+        rows = conn.execute(
             """
             SELECT *
             FROM measurements
@@ -322,179 +254,143 @@ def get_measurements(
             """,
             (
                 device,
-                limit
-            )
+                limit,
+            ),
         ).fetchall()
 
-
-        measurements = [
-            row_to_dict(row)
+        values = [
+            dict(row)
             for row in reversed(rows)
         ]
 
-
         return {
             "device_id": device,
-            "measurements": measurements
+            "measurements": values,
         }
 
     finally:
+        conn.close()
 
-        connection.close()
-
-
-# ---------------------------------------------------------------------------
-# Event history
-# ---------------------------------------------------------------------------
 
 @app.get("/api/events")
-def get_events(
+def events(
     limit: int = Query(
         default=100,
         ge=1,
-        le=5000
+        le=5000,
     ),
     device_id: str | None = None,
     severity: str | None = None,
-    event_type: str | None = None
+    event_type: str | None = None,
 ):
-    """
-    Return recent network/security events.
-
-    Optional filters:
-
-        severity=warning
-        event_type=BSSID_CHANGED
-    """
-
-    connection = open_database()
+    conn = open_database()
 
     try:
-
         device = resolve_device(
-            connection,
-            device_id
+            conn,
+            device_id,
         )
 
         if device is None:
             return {
                 "device_id": None,
-                "events": []
+                "events": [],
             }
 
+        conditions = [
+            "device_id = ?"
+        ]
 
-        query = """
-            SELECT *
-            FROM events
-            WHERE device_id = ?
-        """
-
-        parameters = [device]
-
+        parameters = [
+            device
+        ]
 
         if severity:
-
-            query += """
-                AND severity = ?
-            """
+            conditions.append(
+                "severity = ?"
+            )
 
             parameters.append(
                 severity
             )
 
-
         if event_type:
-
-            query += """
-                AND event_type = ?
-            """
+            conditions.append(
+                "event_type = ?"
+            )
 
             parameters.append(
                 event_type
             )
 
-
-        query += """
-            ORDER BY record_id DESC
-            LIMIT ?
-        """
+        where_clause = (
+            " AND ".join(
+                conditions
+            )
+        )
 
         parameters.append(
             limit
         )
 
-
-        rows = connection.execute(
-            query,
-            parameters
+        rows = conn.execute(
+            f"""
+            SELECT *
+            FROM events
+            WHERE {where_clause}
+            ORDER BY record_id DESC
+            LIMIT ?
+            """,
+            parameters,
         ).fetchall()
 
-
-        events = []
-
+        result = []
 
         for row in rows:
+            item = dict(row)
 
-            event = row_to_dict(row)
-
-            details_json = (
-                event.get(
-                    "details_json"
-                )
+            raw_details = item.pop(
+                "details_json",
+                None,
             )
 
-
             try:
-
-                event["details"] = (
+                item["details"] = (
                     json.loads(
-                        details_json
+                        raw_details
                     )
-                    if details_json
+                    if raw_details
                     else {}
                 )
 
             except json.JSONDecodeError:
-
-                event["details"] = {
-                    "raw": details_json
+                item["details"] = {
+                    "raw": raw_details
                 }
 
-
-            events.append(event)
-
+            result.append(
+                item
+            )
 
         return {
             "device_id": device,
-            "events": events
+            "events": result,
         }
 
     finally:
+        conn.close()
 
-        connection.close()
-
-
-# ---------------------------------------------------------------------------
-# Event types
-# ---------------------------------------------------------------------------
 
 @app.get("/api/event-types")
-def get_event_types(
-    device_id: str | None = None
+def event_types(
+    device_id: str | None = None,
 ):
-    """
-    Return known event types.
-
-    Useful for dashboard filters.
-    """
-
-    connection = open_database()
+    conn = open_database()
 
     try:
-
         device = resolve_device(
-            connection,
-            device_id
+            conn,
+            device_id,
         )
 
         if device is None:
@@ -502,247 +398,46 @@ def get_event_types(
                 "event_types": []
             }
 
-
-        rows = connection.execute(
+        rows = conn.execute(
             """
-            SELECT
-                event_type,
-                COUNT(*) AS count
+            SELECT DISTINCT event_type
             FROM events
-            WHERE device_id = ?
-            GROUP BY event_type
+            WHERE
+                device_id = ?
+                AND event_type IS NOT NULL
             ORDER BY event_type
             """,
-            (device,)
+            (
+                device,
+            ),
         ).fetchall()
 
-
         return {
-            "device_id": device,
             "event_types": [
-                row_to_dict(row)
+                row["event_type"]
                 for row in rows
             ]
         }
 
     finally:
+        conn.close()
 
-        connection.close()
-
-
-# ---------------------------------------------------------------------------
-# CSV streaming
-# ---------------------------------------------------------------------------
-
-def generate_csv(
-    query: str,
-    parameters: tuple
-) -> Generator[str, None, None]:
-    """
-    Stream SQLite query results as CSV.
-
-    Streaming prevents a huge future database from
-    having to be loaded entirely into RAM.
-    """
-
-    connection = open_database()
-
-    try:
-
-        cursor = connection.execute(
-            query,
-            parameters
-        )
-
-
-        column_names = [
-            description[0]
-            for description
-            in cursor.description
-        ]
-
-
-        buffer = io.StringIO()
-
-        writer = csv.writer(
-            buffer
-        )
-
-
-        writer.writerow(
-            column_names
-        )
-
-
-        yield buffer.getvalue()
-
-
-        buffer.seek(0)
-        buffer.truncate(0)
-
-
-        for row in cursor:
-
-            writer.writerow(
-                [
-                    row[column]
-                    for column
-                    in column_names
-                ]
-            )
-
-            yield buffer.getvalue()
-
-            buffer.seek(0)
-            buffer.truncate(0)
-
-
-    finally:
-
-        connection.close()
-
-
-# ---------------------------------------------------------------------------
-# Measurement CSV export
-# ---------------------------------------------------------------------------
-
-@app.get("/api/export/measurements.csv")
-def export_measurements(
-    device_id: str | None = None
-):
-    connection = open_database()
-
-    try:
-
-        device = resolve_device(
-            connection,
-            device_id
-        )
-
-    finally:
-
-        connection.close()
-
-
-    if device is None:
-        raise HTTPException(
-            status_code=404,
-            detail="No measurement data available"
-        )
-
-
-    query = """
-        SELECT *
-        FROM measurements
-        WHERE device_id = ?
-        ORDER BY record_id ASC
-    """
-
-
-    headers = {
-        "Content-Disposition":
-            (
-                "attachment; "
-                f'filename="'
-                f'{device}_measurements.csv"'
-            )
-    }
-
-
-    return StreamingResponse(
-        generate_csv(
-            query,
-            (device,)
-        ),
-        media_type="text/csv",
-        headers=headers
-    )
-
-
-# ---------------------------------------------------------------------------
-# Event CSV export
-# ---------------------------------------------------------------------------
-
-@app.get("/api/export/events.csv")
-def export_events(
-    device_id: str | None = None
-):
-    connection = open_database()
-
-    try:
-
-        device = resolve_device(
-            connection,
-            device_id
-        )
-
-    finally:
-
-        connection.close()
-
-
-    if device is None:
-        raise HTTPException(
-            status_code=404,
-            detail="No event data available"
-        )
-
-
-    query = """
-        SELECT *
-        FROM events
-        WHERE device_id = ?
-        ORDER BY record_id ASC
-    """
-
-
-    headers = {
-        "Content-Disposition":
-            (
-                "attachment; "
-                f'filename="'
-                f'{device}_events.csv"'
-            )
-    }
-
-
-    return StreamingResponse(
-        generate_csv(
-            query,
-            (device,)
-        ),
-        media_type="text/csv",
-        headers=headers
-    )
-
-
-# ---------------------------------------------------------------------------
-# Raw records
-# ---------------------------------------------------------------------------
 
 @app.get("/api/raw")
-def get_raw_records(
+def raw_records(
     limit: int = Query(
         default=100,
         ge=1,
-        le=1000
+        le=5000,
     ),
-    device_id: str | None = None
+    device_id: str | None = None,
 ):
-    """
-    Debug/development endpoint.
-
-    Lets you inspect the complete original JSON
-    records preserved by collector.py.
-    """
-
-    connection = open_database()
+    conn = open_database()
 
     try:
-
         device = resolve_device(
-            connection,
-            device_id
+            conn,
+            device_id,
         )
 
         if device is None:
@@ -750,8 +445,7 @@ def get_raw_records(
                 "records": []
             }
 
-
-        rows = connection.execute(
+        rows = conn.execute(
             """
             SELECT *
             FROM records
@@ -761,44 +455,204 @@ def get_raw_records(
             """,
             (
                 device,
-                limit
-            )
+                limit,
+            ),
         ).fetchall()
 
-
-        records = []
-
+        result = []
 
         for row in rows:
-
-            record = row_to_dict(row)
-
+            item = dict(row)
 
             try:
-
-                record["payload"] = (
+                item["payload"] = (
                     json.loads(
-                        record[
+                        item[
                             "payload_json"
                         ]
                     )
                 )
 
             except json.JSONDecodeError:
+                item["payload"] = None
 
-                record["payload"] = None
-
-
-            records.append(
-                record
+            result.append(
+                item
             )
-
 
         return {
             "device_id": device,
-            "records": records
+            "records": result,
         }
 
     finally:
+        conn.close()
 
-        connection.close()
+
+def csv_stream(
+    query,
+    parameters,
+) -> Iterator[str]:
+    conn = open_database()
+
+    try:
+        cursor = conn.execute(
+            query,
+            parameters,
+        )
+
+        column_names = [
+            item[0]
+            for item
+            in cursor.description
+        ]
+
+        buffer = io.StringIO()
+
+        writer = csv.writer(
+            buffer
+        )
+
+        writer.writerow(
+            column_names
+        )
+
+        yield buffer.getvalue()
+
+        buffer.seek(0)
+        buffer.truncate(0)
+
+        for row in cursor:
+            writer.writerow(
+                list(row)
+            )
+
+            yield buffer.getvalue()
+
+            buffer.seek(0)
+            buffer.truncate(0)
+
+    finally:
+        conn.close()
+
+
+@app.get(
+    "/api/export/measurements.csv"
+)
+def export_measurements(
+    device_id: str | None = None,
+):
+    conn = open_database()
+
+    try:
+        device = resolve_device(
+            conn,
+            device_id,
+        )
+
+    finally:
+        conn.close()
+
+    if device is None:
+        raise HTTPException(
+            status_code=404,
+            detail="No device data available.",
+        )
+
+    safe_device = (
+        device
+        .replace(
+            "/",
+            "_",
+        )
+        .replace(
+            "\\",
+            "_",
+        )
+    )
+
+    headers = {
+        "Content-Disposition":
+            (
+                "attachment; "
+                f'filename="'
+                f'{safe_device}_measurements.csv"'
+            )
+    }
+
+    return StreamingResponse(
+        csv_stream(
+            """
+            SELECT *
+            FROM measurements
+            WHERE device_id = ?
+            ORDER BY record_id ASC
+            """,
+            (
+                device,
+            ),
+        ),
+        media_type="text/csv",
+        headers=headers,
+    )
+
+
+@app.get(
+    "/api/export/events.csv"
+)
+def export_events(
+    device_id: str | None = None,
+):
+    conn = open_database()
+
+    try:
+        device = resolve_device(
+            conn,
+            device_id,
+        )
+
+    finally:
+        conn.close()
+
+    if device is None:
+        raise HTTPException(
+            status_code=404,
+            detail="No device data available.",
+        )
+
+    safe_device = (
+        device
+        .replace(
+            "/",
+            "_",
+        )
+        .replace(
+            "\\",
+            "_",
+        )
+    )
+
+    headers = {
+        "Content-Disposition":
+            (
+                "attachment; "
+                f'filename="'
+                f'{safe_device}_events.csv"'
+            )
+    }
+
+    return StreamingResponse(
+        csv_stream(
+            """
+            SELECT *
+            FROM events
+            WHERE device_id = ?
+            ORDER BY record_id ASC
+            """,
+            (
+                device,
+            ),
+        ),
+        media_type="text/csv",
+        headers=headers,
+    )

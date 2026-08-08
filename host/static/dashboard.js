@@ -1,143 +1,96 @@
-"use strict";
-
-
 const POLL_INTERVAL_MS = 2000;
 const HISTORY_LIMIT = 180;
 const EVENT_LIMIT = 100;
 
 
-let selectedDevice = "";
-
-let rttChart = null;
-let rssiChart = null;
-let jitterChart = null;
-let lossChart = null;
+let selectedDevice = null;
 
 
-// ---------------------------------------------------------------------------
-// DOM helpers
-// ---------------------------------------------------------------------------
+/*
+ * ================================================================
+ * DOM helpers
+ * ================================================================
+ */
 
-function element(id)
-{
+function element(id) {
     return document.getElementById(id);
 }
 
 
-function setText(id, value)
-{
-    element(id).textContent = value;
+function setText(id, value) {
+    const target = element(id);
+
+    if (target) {
+        target.textContent = value;
+    }
 }
 
 
-// ---------------------------------------------------------------------------
-// Formatting
-// ---------------------------------------------------------------------------
-
-function formatValue(
-    value,
-    suffix = "",
-    decimals = null
-)
-{
+function formatMs(value) {
     if (
         value === null ||
         value === undefined
-    )
-    {
+    ) {
         return "--";
     }
 
+    return `${value} ms`;
+}
+
+
+function formatPercent(value) {
+    if (
+        value === null ||
+        value === undefined
+    ) {
+        return "--";
+    }
+
+    return `${Number(value).toFixed(2)}%`;
+}
+
+
+function formatTime(value) {
+    if (!value) {
+        return "--";
+    }
+
+    const date = new Date(value);
 
     if (
-        decimals !== null &&
-        typeof value === "number"
-    )
-    {
-        return (
-            value.toFixed(decimals)
-            + suffix
-        );
+        Number.isNaN(
+            date.getTime()
+        )
+    ) {
+        return value;
     }
 
-
-    return `${value}${suffix}`;
+    return date.toLocaleTimeString();
 }
 
 
-function formatTime(value)
-{
-    if (!value)
-    {
-        return "--";
-    }
-
-
-    const date = new Date(value);
-
-
-    return date.toLocaleString();
-}
-
-
-function shortTime(value)
-{
-    if (!value)
-    {
-        return "";
-    }
-
-
-    const date = new Date(value);
-
-
-    return date.toLocaleTimeString(
-        [],
-        {
-            hour: "2-digit",
-            minute: "2-digit",
-            second: "2-digit"
-        }
+function apiUrl(path, parameters = {}) {
+    const url = new URL(
+        path,
+        window.location.origin
     );
-}
 
-
-// ---------------------------------------------------------------------------
-// API
-// ---------------------------------------------------------------------------
-
-function buildUrl(
-    path,
-    parameters = {}
-)
-{
-    const url =
-        new URL(
-            path,
-            window.location.origin
-        );
-
-
-    if (selectedDevice)
-    {
+    if (selectedDevice) {
         url.searchParams.set(
             "device_id",
             selectedDevice
         );
     }
 
-
     for (
         const [key, value]
         of Object.entries(parameters)
-    )
-    {
+    ) {
         if (
             value !== null &&
             value !== undefined &&
             value !== ""
-        )
-        {
+        ) {
             url.searchParams.set(
                 key,
                 value
@@ -145,454 +98,94 @@ function buildUrl(
         }
     }
 
-
     return url.toString();
 }
 
 
-async function getJson(
-    path,
-    parameters = {}
-)
-{
-    const response =
-        await fetch(
-            buildUrl(
-                path,
-                parameters
-            ),
-            {
-                cache: "no-store"
-            }
-        );
+async function getJson(url) {
+    const response = await fetch(
+        url,
+        {
+            cache: "no-store"
+        }
+    );
 
-
-    if (!response.ok)
-    {
+    if (!response.ok) {
         throw new Error(
             `${response.status} ${response.statusText}`
         );
     }
 
-
     return response.json();
 }
 
 
-// ---------------------------------------------------------------------------
-// Devices
-// ---------------------------------------------------------------------------
-
-async function loadDevices()
-{
-    const result =
-        await getJson(
-            "/api/devices"
-        );
-
-
-    const selector =
-        element(
-            "device-selector"
-        );
-
-
-    const oldDevice =
-        selectedDevice;
-
-
-    selector.innerHTML = "";
-
-
-    if (
-        !result.devices ||
-        result.devices.length === 0
-    )
-    {
-        const option =
-            document.createElement(
-                "option"
-            );
-
-
-        option.textContent =
-            "No devices";
-
-
-        selector.appendChild(
-            option
-        );
-
-
-        return;
-    }
-
-
-    for (
-        const device
-        of result.devices
-    )
-    {
-        const option =
-            document.createElement(
-                "option"
-            );
-
-
-        option.value =
-            device.device_id;
-
-
-        option.textContent =
-            device.device_id;
-
-
-        selector.appendChild(
-            option
-        );
-    }
-
-
-    if (
-        oldDevice &&
-        result.devices.some(
-            device =>
-                device.device_id
-                === oldDevice
-        )
-    )
-    {
-        selector.value =
-            oldDevice;
-    }
-
-
-    selectedDevice =
-        selector.value;
-
-
-    updateExportLinks();
-}
-
-
-// ---------------------------------------------------------------------------
-// Export links
-// ---------------------------------------------------------------------------
-
-function updateExportLinks()
-{
-    element(
-        "export-measurements"
-    ).href =
-        buildUrl(
-            "/api/export/measurements.csv"
-        );
-
-
-    element(
-        "export-events"
-    ).href =
-        buildUrl(
-            "/api/export/events.csv"
-        );
-}
-
-
-// ---------------------------------------------------------------------------
-// Current status
-// ---------------------------------------------------------------------------
-
-async function updateStatus()
-{
-    const result =
-        await getJson(
-            "/api/status"
-        );
-
-
-    if (
-        !result.available ||
-        !result.measurement
-    )
-    {
-        setText(
-            "status-value",
-            "NO DATA"
-        );
-
-        return;
-    }
-
-
-    const m =
-        result.measurement;
-
-
-    setText(
-        "status-value",
-        m.status || "--"
-    );
-
-
-    const statusElement =
-        element(
-            "status-value"
-        );
-
-
-    statusElement.className =
-        "metric-value";
-
-
-    if (m.status === "ONLINE")
-    {
-        statusElement.classList.add(
-            "status-online"
-        );
-    }
-    else if (
-        m.status ===
-            "DISCONNECTED"
-        ||
-        m.status ===
-            "INTERNET_ISSUE"
-        ||
-        m.status ===
-            "LOCAL_NETWORK_ISSUE"
-    )
-    {
-        statusElement.classList.add(
-            "status-danger"
-        );
-    }
-    else
-    {
-        statusElement.classList.add(
-            "status-warning"
-        );
-    }
-
-
-    setText(
-        "status-time",
-        `Last sample ${formatTime(
-            m.received_at
-        )}`
-    );
-
-
-    setText(
-        "rssi-value",
-        formatValue(
-            m.rssi_dbm,
-            " dBm"
-        )
-    );
-
-
-    setText(
-        "rtt-value",
-        formatValue(
-            m.internet_rtt_ms,
-            " ms"
-        )
-    );
-
-
-    setText(
-        "rtt-range",
-        (
-            `${formatValue(
-                m.min_rtt_ms
-            )} / `
-            +
-            `${formatValue(
-                m.avg_rtt_ms,
-                "",
-                1
-            )} / `
-            +
-            `${formatValue(
-                m.max_rtt_ms
-            )} ms`
-        )
-    );
-
-
-    setText(
-        "jitter-value",
-        formatValue(
-            m.jitter_ms,
-            " ms"
-        )
-    );
-
-
-    setText(
-        "avg-jitter",
-        (
-            "Average "
-            +
-            formatValue(
-                m.avg_jitter_ms,
-                " ms",
-                1
-            )
-        )
-    );
-
-
-    setText(
-        "loss-value",
-        formatValue(
-            m.packet_loss_pct,
-            "%",
-            2
-        )
-    );
-
-
-    setText(
-        "channel-value",
-        formatValue(
-            m.channel
-        )
-    );
-
-
-    setText(
-        "bssid-value",
-        `BSSID ${m.bssid || "--"}`
-    );
-
-
-    setText(
-        "gateway-rtt-value",
-        formatValue(
-            m.gateway_rtt_ms,
-            " ms"
-        )
-    );
-
-
-    setText(
-        "gateway-value",
-        `Gateway ${m.gateway || "--"}`
-    );
-
-
-    setText(
-        "disconnect-value",
-        formatValue(
-            m.disconnects
-        )
-    );
-
-
-    setText(
-        "reconnect-value",
-        (
-            "Reconnects "
-            +
-            formatValue(
-                m.reconnects
-            )
-        )
-    );
-}
-
-
-// ---------------------------------------------------------------------------
-// Charts
-// ---------------------------------------------------------------------------
-
-function createLineChart(
+/*
+ * ================================================================
+ * Chart helpers
+ * ================================================================
+ */
+
+function makeLineChart(
     canvasId,
     label,
-    color
-)
-{
+    yAxisText,
+    color,
+) {
     return new Chart(
         element(canvasId),
         {
             type: "line",
 
-            data:
-            {
+            data: {
                 labels: [],
 
-                datasets:
-                [
+                datasets: [
                     {
                         label: label,
-
                         data: [],
-
-                        borderColor: color,
-
-                        backgroundColor: color,
-
+                        
+						borderColor: color,
+						backgroundColor: color,
+						pointBackgroundColor: color,
+						
+                        tension: 0.2,
+                        pointRadius: 1,
                         borderWidth: 2,
 
-                        pointRadius: 0,
-
-                        tension: 0.2,
-
-                        spanGaps: true
+                        spanGaps: false,
                     }
                 ]
             },
 
-            options:
-            {
+            options: {
                 responsive: true,
-
                 maintainAspectRatio: false,
 
                 animation: false,
 
-                interaction:
-                {
+                interaction: {
                     intersect: false,
-                    mode: "index"
+                    mode: "index",
                 },
 
-                plugins:
-                {
-                    legend:
-                    {
-                        display: false
+                plugins: {
+                    legend: {
+                        display: false,
                     }
                 },
 
-                scales:
-                {
-                    x:
-                    {
-                        ticks:
-                        {
+                scales: {
+                    x: {
+                        ticks: {
                             maxTicksLimit: 8,
-                            color: "#8b949e"
-                        },
-
-                        grid:
-                        {
-                            color:
-                                "rgba(139,148,158,0.08)"
                         }
                     },
 
-                    y:
-                    {
-                        ticks:
-                        {
-                            color: "#8b949e"
-                        },
-
-                        grid:
-                        {
-                            color:
-                                "rgba(139,148,158,0.08)"
+                    y: {
+                        title: {
+                            display: true,
+                            text: yAxisText,
                         }
                     }
                 }
@@ -602,47 +195,462 @@ function createLineChart(
 }
 
 
-function initializeCharts()
-{
-    rttChart =
-        createLineChart(
-            "rtt-chart",
-            "Internet RTT",
-            "#58a6ff"
+const rttChart = makeLineChart(
+    "rttChart",
+    "Internet RTT",
+    "ms",
+    "#60a5fa"
+);
+
+
+const dnsLatencyChart = makeLineChart(
+    "dnsLatencyChart",
+    "DNS Latency",
+    "ms",
+    "#a78bfa"
+);
+
+
+
+const rssiChart = makeLineChart(
+    "rssiChart",
+    "RSSI",
+    "dBm",
+    "#36d399"
+);
+
+
+const jitterChart = makeLineChart(
+    "jitterChart",
+    "Jitter",
+    "ms",
+    "#f7c948"
+);
+
+const lossChart = makeLineChart(
+    "lossChart",
+    "Packet Loss",
+    "%",
+    "#ff6b6b"
+);
+
+/*
+ * ================================================================
+ * Devices
+ * ================================================================
+ */
+
+async function loadDevices() {
+    const data = await getJson(
+        "/api/devices"
+    );
+
+    const devices = (
+        data.devices || []
+    );
+
+
+    const selector = element(
+        "deviceSelector"
+    );
+
+
+    const previousValue =
+        selectedDevice;
+
+
+    selector.innerHTML = "";
+
+
+    if (devices.length === 0) {
+        const option =
+            document.createElement(
+                "option"
+            );
+
+        option.value = "";
+        option.textContent =
+            "No devices";
+
+        selector.appendChild(
+            option
+        );
+
+        selectedDevice = null;
+
+        return;
+    }
+
+
+    for (const device of devices) {
+        const option =
+            document.createElement(
+                "option"
+            );
+
+        option.value =
+            device.device_id;
+
+        option.textContent =
+            device.device_id;
+
+        selector.appendChild(
+            option
+        );
+    }
+
+
+    if (
+        previousValue &&
+        devices.some(
+            item =>
+                item.device_id ===
+                previousValue
+        )
+    ) {
+        selectedDevice =
+            previousValue;
+    }
+    else {
+        selectedDevice =
+            devices[0].device_id;
+    }
+
+
+    selector.value =
+        selectedDevice;
+
+
+    updateExportLinks();
+}
+
+
+function updateExportLinks() {
+    const measurements =
+        element(
+            "exportMeasurements"
+        );
+
+    const events =
+        element(
+            "exportEvents"
         );
 
 
-    rssiChart =
-        createLineChart(
-            "rssi-chart",
-            "RSSI",
-            "#3fb950"
+    measurements.href =
+        apiUrl(
+            "/api/export/measurements.csv"
         );
 
 
-    jitterChart =
-        createLineChart(
-            "jitter-chart",
-            "Jitter",
-            "#d29922"
-        );
-
-
-    lossChart =
-        createLineChart(
-            "loss-chart",
-            "Packet Loss",
-            "#f85149"
+    events.href =
+        apiUrl(
+            "/api/export/events.csv"
         );
 }
 
 
+/*
+ * ================================================================
+ * Status card
+ * ================================================================
+ */
+
+function statusClass(status) {
+    const critical = new Set([
+        "DISCONNECTED",
+        "INTERNET_OUTAGE",
+    ]);
+
+
+    const warning = new Set([
+        "LOCAL_NETWORK_ISSUE",
+        "INTERNET_ISSUE",
+        "DNS_FAILURE",
+        "HIGH_PACKET_LOSS",
+        "HIGH_LATENCY",
+        "HIGH_JITTER",
+        "WEAK_SIGNAL",
+    ]);
+
+
+    if (critical.has(status)) {
+        return "status-critical";
+    }
+
+
+    if (warning.has(status)) {
+        return "status-warning";
+    }
+
+
+    return "status-online";
+}
+
+
+async function updateStatus() {
+    if (!selectedDevice) {
+        return;
+    }
+
+
+    const latest = await getJson(
+        apiUrl(
+            "/api/status"
+        )
+    );
+
+
+    const status =
+        latest.status || "UNKNOWN";
+
+
+    const statusElement =
+        element(
+            "statusValue"
+        );
+
+
+    statusElement.textContent =
+        status;
+
+
+    statusElement.classList.remove(
+        "status-online",
+        "status-warning",
+        "status-critical",
+    );
+
+
+    statusElement.classList.add(
+        statusClass(status)
+    );
+
+
+    setText(
+        "statusSSID",
+        `SSID: ${latest.ssid || "--"}`
+    );
+
+
+    /*
+     * Device / IP.
+     */
+    setText(
+        "deviceIp",
+        latest.ip_address ||
+        "Unknown"
+    );
+
+
+    setText(
+        "deviceIdValue",
+        `Device: ${
+            latest.device_id || "--"
+        }`
+    );
+
+
+    /*
+     * RSSI.
+     */
+    setText(
+        "rssiValue",
+        latest.rssi_dbm == null
+            ? "--"
+            : `${latest.rssi_dbm} dBm`
+    );
+
+
+    setText(
+        "rssiDetail",
+        "RSSI"
+    );
+
+
+    /*
+     * Internet RTT.
+     */
+    setText(
+        "rttValue",
+        formatMs(
+            latest.internet_rtt_ms
+        )
+    );
+
+
+    setText(
+        "rttStats",
+        (
+            `Min ${formatMs(
+                latest.min_rtt_ms
+            )} / ` +
+            `Avg ${formatMs(
+                latest.avg_rtt_ms == null
+                    ? null
+                    : Number(
+                        latest.avg_rtt_ms
+                    ).toFixed(1)
+            )} / ` +
+            `Max ${formatMs(
+                latest.max_rtt_ms
+            )}`
+        )
+    );
+
+
+    /*
+     * DNS.
+     */
+    setText(
+        "dnsLatency",
+        formatMs(
+            latest.dns_latency_ms
+        )
+    );
+
+
+    const resolver =
+        latest.dns_server ||
+        "Unknown";
+
+
+    const testDomain =
+        latest.dns_test_domain ||
+        "--";
+
+
+    setText(
+        "dnsServer",
+        `Resolver: ${resolver}`
+    );
+
+
+    setText(
+        "dnsDomain",
+        `Query: ${testDomain}`
+    );
+
+
+    setText(
+        "dnsChartServer",
+        (
+            `Resolver: ${resolver} • ` +
+            `Query: ${testDomain}`
+        )
+    );
+
+
+    /*
+     * Jitter.
+     */
+    setText(
+        "jitterValue",
+        formatMs(
+            latest.jitter_ms
+        )
+    );
+
+
+    setText(
+        "jitterAverage",
+        (
+            "Average: " +
+            (
+                latest.avg_jitter_ms ==
+                null
+                    ? "--"
+                    : `${
+                        Number(
+                            latest
+                                .avg_jitter_ms
+                        ).toFixed(1)
+                    } ms`
+            )
+        )
+    );
+
+
+    /*
+     * Packet loss.
+     */
+    setText(
+        "lossValue",
+        formatPercent(
+            latest.packet_loss_pct
+        )
+    );
+
+
+    /*
+     * Access point.
+     */
+    setText(
+        "channelValue",
+        latest.channel == null
+            ? "--"
+            : `Channel ${latest.channel}`
+    );
+
+
+    setText(
+        "bssidValue",
+        `BSSID: ${
+            latest.bssid || "--"
+        }`
+    );
+
+
+    /*
+     * Gateway.
+     */
+    setText(
+        "gatewayRtt",
+        formatMs(
+            latest.gateway_rtt_ms
+        )
+    );
+
+
+    setText(
+        "gatewayValue",
+        `Gateway: ${
+            latest.gateway || "--"
+        }`
+    );
+
+
+    /*
+     * Reconnects.
+     */
+    setText(
+        "reconnectValue",
+        latest.reconnects ?? "--"
+    );
+
+
+    setText(
+        "disconnectValue",
+        (
+            `Disconnects: ${
+                latest.disconnects ?? "--"
+            }`
+        )
+    );
+}
+
+
+/*
+ * ================================================================
+ * Historical graphs
+ * ================================================================
+ */
+
 function updateChart(
     chart,
     labels,
-    values
-)
-{
+    values,
+) {
     chart.data.labels =
         labels;
 
@@ -657,25 +665,30 @@ function updateChart(
 }
 
 
-async function updateMeasurements()
-{
-    const result =
-        await getJson(
+async function updateMeasurements() {
+    if (!selectedDevice) {
+        return;
+    }
+
+
+    const data = await getJson(
+        apiUrl(
             "/api/measurements",
             {
                 limit: HISTORY_LIMIT
             }
-        );
+        )
+    );
 
 
     const measurements =
-        result.measurements || [];
+        data.measurements || [];
 
 
     const labels =
         measurements.map(
             measurement =>
-                shortTime(
+                formatTime(
                     measurement.received_at
                 )
         );
@@ -686,7 +699,19 @@ async function updateMeasurements()
         labels,
         measurements.map(
             measurement =>
-                measurement.internet_rtt_ms
+                measurement
+                    .internet_rtt_ms
+        )
+    );
+
+
+    updateChart(
+        dnsLatencyChart,
+        labels,
+        measurements.map(
+            measurement =>
+                measurement
+                    .dns_latency_ms
         )
     );
 
@@ -716,27 +741,39 @@ async function updateMeasurements()
         labels,
         measurements.map(
             measurement =>
-                measurement.packet_loss_pct
+                measurement
+                    .packet_loss_pct
         )
     );
 }
 
 
-// ---------------------------------------------------------------------------
-// Event filters
-// ---------------------------------------------------------------------------
+/*
+ * ================================================================
+ * Event filters
+ * ================================================================
+ */
 
-async function updateEventTypes()
-{
-    const result =
-        await getJson(
+async function updateEventTypes() {
+    if (!selectedDevice) {
+        return;
+    }
+
+
+    const data = await getJson(
+        apiUrl(
             "/api/event-types"
-        );
+        )
+    );
+
+
+    const types =
+        data.event_types || [];
 
 
     const selector =
         element(
-            "event-filter"
+            "eventTypeFilter"
         );
 
 
@@ -748,28 +785,17 @@ async function updateEventTypes()
         '<option value="">All event types</option>';
 
 
-    for (
-        const eventType
-        of result.event_types || []
-    )
-    {
+    for (const type of types) {
         const option =
             document.createElement(
                 "option"
             );
 
-
         option.value =
-            eventType.event_type;
-
+            type;
 
         option.textContent =
-            (
-                `${eventType.event_type} `
-                +
-                `(${eventType.count})`
-            );
-
+            type;
 
         selector.appendChild(
             option
@@ -778,82 +804,87 @@ async function updateEventTypes()
 
 
     if (
-        [...selector.options].some(
-            option =>
-                option.value
-                === previous
-        )
-    )
-    {
+        types.includes(previous)
+    ) {
         selector.value =
             previous;
     }
 }
 
 
-// ---------------------------------------------------------------------------
-// Event display
-// ---------------------------------------------------------------------------
+/*
+ * ================================================================
+ * Event log
+ * ================================================================
+ */
 
 function formatEventDetails(
     details
-)
-{
-    if (!details)
-    {
+) {
+    if (
+        !details ||
+        Object.keys(details).length === 0
+    ) {
         return "";
     }
 
 
     if (
         Object.prototype
-            .hasOwnProperty.call(
+            .hasOwnProperty
+            .call(
                 details,
                 "old"
             )
         &&
         Object.prototype
-            .hasOwnProperty.call(
+            .hasOwnProperty
+            .call(
                 details,
                 "new"
             )
-    )
-    {
+    ) {
         return (
-            `${details.old}`
-            +
-            " → "
-            +
+            `${details.old} → ` +
             `${details.new}`
         );
     }
 
 
     if (
-        details.metric !== undefined
-    )
-    {
-        return (
-            `${details.metric}: `
-            +
-            `${details.value}`
-            +
-            ` (threshold `
-            +
-            `${details.threshold})`
-        );
+        details.metric !== undefined &&
+        details.value !== undefined
+    ) {
+        let output =
+            `${details.metric}: ` +
+            `${details.value}`;
+
+
+        if (
+            details.threshold !==
+            undefined
+        ) {
+            output +=
+                ` (threshold: ` +
+                `${details.threshold})`;
+        }
+
+
+        return output;
     }
 
 
     if (
-        details.duration_ms !== undefined
-    )
-    {
+        details.duration_ms !==
+        undefined
+    ) {
         return (
-            `${(
-                details.duration_ms
-                / 1000
-            ).toFixed(2)} seconds`
+            `${
+                (
+                    details.duration_ms /
+                    1000
+                ).toFixed(2)
+            } seconds`
         );
     }
 
@@ -864,45 +895,57 @@ function formatEventDetails(
 }
 
 
-async function updateEvents()
-{
+async function updateEvents() {
+    if (!selectedDevice) {
+        return;
+    }
+
+
     const severity =
         element(
-            "severity-filter"
+            "severityFilter"
         ).value;
 
 
     const eventType =
         element(
-            "event-filter"
+            "eventTypeFilter"
         ).value;
 
 
-    const result =
-        await getJson(
+    const data = await getJson(
+        apiUrl(
             "/api/events",
             {
-                limit: EVENT_LIMIT,
-                severity: severity,
-                event_type: eventType
+                limit:
+                    EVENT_LIMIT,
+
+                severity:
+                    severity,
+
+                event_type:
+                    eventType,
             }
-        );
+        )
+    );
 
 
-    const table =
+    const events =
+        data.events || [];
+
+
+    const body =
         element(
-            "event-table"
+            "eventTableBody"
         );
 
 
-    table.innerHTML = "";
+    body.innerHTML = "";
 
 
     if (
-        !result.events ||
-        result.events.length === 0
-    )
-    {
+        events.length === 0
+    ) {
         const row =
             document.createElement(
                 "tr"
@@ -910,10 +953,17 @@ async function updateEvents()
 
 
         row.innerHTML =
-            '<td colspan="4">No events found.</td>';
+            `
+            <td
+                colspan="4"
+                class="empty-row"
+            >
+                No matching events.
+            </td>
+            `;
 
 
-        table.appendChild(
+        body.appendChild(
             row
         );
 
@@ -924,9 +974,8 @@ async function updateEvents()
 
     for (
         const event
-        of result.events
-    )
-    {
+        of events
+    ) {
         const row =
             document.createElement(
                 "tr"
@@ -951,22 +1000,17 @@ async function updateEvents()
             );
 
 
+        const severityText =
+            event.severity ||
+            "unknown";
+
+
         severityCell.textContent =
-            (
-                event.severity ||
-                "info"
-            ).toUpperCase();
+            severityText.toUpperCase();
 
 
         severityCell.className =
-            (
-                "severity-"
-                +
-                (
-                    event.severity ||
-                    "info"
-                )
-            );
+            `severity-${severityText}`;
 
 
         const eventCell =
@@ -976,195 +1020,145 @@ async function updateEvents()
 
 
         eventCell.textContent =
-            event.event_type;
+            event.event_type ||
+            "UNKNOWN";
 
 
-        const detailCell =
+        const detailsCell =
             document.createElement(
                 "td"
             );
 
 
-        detailCell.className =
-            "details";
-
-
-        detailCell.textContent =
+        detailsCell.textContent =
             formatEventDetails(
                 event.details
             );
 
 
-        row.appendChild(
-            timeCell
+        row.append(
+            timeCell,
+            severityCell,
+            eventCell,
+            detailsCell,
         );
 
 
-        row.appendChild(
-            severityCell
-        );
-
-
-        row.appendChild(
-            eventCell
-        );
-
-
-        row.appendChild(
-            detailCell
-        );
-
-
-        table.appendChild(
+        body.appendChild(
             row
         );
     }
 }
 
 
-// ---------------------------------------------------------------------------
-// Refresh
-// ---------------------------------------------------------------------------
+/*
+ * ================================================================
+ * Dashboard refresh
+ * ================================================================
+ */
 
-function showError(error)
-{
-    const errorElement =
-        element(
-            "error"
-        );
-
-
-    errorElement.style.display =
-        "block";
+async function refreshDashboard() {
+    if (!selectedDevice) {
+        return;
+    }
 
 
-    errorElement.textContent =
-        `Dashboard error: ${error.message}`;
-
-
-    setText(
-        "live-status",
-        "Connection error"
-    );
-}
-
-
-function clearError()
-{
-    element(
-        "error"
-    ).style.display =
-        "none";
-
-
-    setText(
-        "live-status",
-        "Live"
-    );
-}
-
-
-async function refreshDashboard()
-{
-    try
-    {
-        await Promise.all(
-            [
-                updateStatus(),
-                updateMeasurements(),
-                updateEvents()
-            ]
-        );
-
-
-        clearError();
+    try {
+        await Promise.all([
+            updateStatus(),
+            updateMeasurements(),
+            updateEvents(),
+        ]);
 
 
         setText(
-            "last-refresh",
+            "lastUpdated",
             (
-                "Dashboard refreshed "
-                +
+                "Last updated: " +
                 new Date()
                     .toLocaleTimeString()
             )
         );
+
+
+        setText(
+            "dashboardError",
+            ""
+        );
     }
-    catch (error)
-    {
-        showError(
+    catch (error) {
+        console.error(
             error
+        );
+
+
+        setText(
+            "dashboardError",
+            `Error: ${error.message}`
         );
     }
 }
 
 
-// ---------------------------------------------------------------------------
-// Device changes
-// ---------------------------------------------------------------------------
+/*
+ * ================================================================
+ * Event listeners
+ * ================================================================
+ */
 
-async function deviceChanged()
-{
-    selectedDevice =
-        element(
-            "device-selector"
-        ).value;
-
-
-    updateExportLinks();
-
-
-    await updateEventTypes();
+element(
+    "deviceSelector"
+).addEventListener(
+    "change",
+    async event => {
+        selectedDevice =
+            event.target.value ||
+            null;
 
 
-    await refreshDashboard();
-}
-
-
-// ---------------------------------------------------------------------------
-// Startup
-// ---------------------------------------------------------------------------
-
-async function startDashboard()
-{
-    try
-    {
-        initializeCharts();
-
-
-        await loadDevices();
+        updateExportLinks();
 
 
         await updateEventTypes();
+        await refreshDashboard();
+    }
+);
 
+
+element(
+    "severityFilter"
+).addEventListener(
+    "change",
+    updateEvents
+);
+
+
+element(
+    "eventTypeFilter"
+).addEventListener(
+    "change",
+    updateEvents
+);
+
+
+/*
+ * ================================================================
+ * Startup
+ * ================================================================
+ */
+
+async function startDashboard() {
+    try {
+        await loadDevices();
+
+        await updateEventTypes();
 
         await refreshDashboard();
 
 
-        element(
-            "device-selector"
-        ).addEventListener(
-            "change",
-            deviceChanged
-        );
-
-
-        element(
-            "severity-filter"
-        ).addEventListener(
-            "change",
-            updateEvents
-        );
-
-
-        element(
-            "event-filter"
-        ).addEventListener(
-            "change",
-            updateEvents
-        );
-
-
+        /*
+         * Live measurements.
+         */
         setInterval(
             refreshDashboard,
             POLL_INTERVAL_MS
@@ -1172,29 +1166,53 @@ async function startDashboard()
 
 
         /*
-         * Refresh device list occasionally so a newly
-         * connected Pico automatically becomes visible.
+         * Devices may appear later.
          */
         setInterval(
-            loadDevices,
+            async () => {
+                try {
+                    await loadDevices();
+                }
+                catch (error) {
+                    console.error(
+                        error
+                    );
+                }
+            },
             30000
         );
-        
+
+
+        /*
+         * Newly created event types should
+         * automatically enter the filter.
+         */
         setInterval(
-			updateEventTypes,
-			30000
-		);
+            async () => {
+                try {
+                    await updateEventTypes();
+                }
+                catch (error) {
+                    console.error(
+                        error
+                    );
+                }
+            },
+            30000
+        );
     }
-    catch (error)
-    {
-        showError(
+    catch (error) {
+        console.error(
             error
+        );
+
+
+        setText(
+            "dashboardError",
+            `Error: ${error.message}`
         );
     }
 }
 
 
-document.addEventListener(
-    "DOMContentLoaded",
-    startDashboard
-);
+startDashboard();

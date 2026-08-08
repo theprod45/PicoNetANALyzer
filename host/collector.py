@@ -13,81 +13,55 @@ import serial
 from serial import SerialException
 
 
-# Collector currently understands telemetry schema version 1.
-SUPPORTED_SCHEMA_VERSION = 1
+PROJECT_ROOT = Path(__file__).resolve().parent.parent
+
+DEFAULT_DB = PROJECT_ROOT / "data" / "piconet.db"
+DEFAULT_PORT = "/dev/ttyACM0"
+DEFAULT_BAUD = 115200
 
 
-# ---------------------------------------------------------------------------
-# Time
-# ---------------------------------------------------------------------------
-
-def utc_now() -> str:
-    """
-    Return the current UTC timestamp in ISO-8601 format.
-
-    Example:
-        2026-08-08T15:42:31.123456+00:00
-    """
-    return datetime.now(timezone.utc).isoformat()
+def utc_now():
+    return (
+        datetime.now(timezone.utc)
+        .isoformat(timespec="milliseconds")
+        .replace("+00:00", "Z")
+    )
 
 
-# ---------------------------------------------------------------------------
-# Database setup
-# ---------------------------------------------------------------------------
+def open_database(path):
+    path = Path(path)
 
-def create_database(database_path: Path) -> sqlite3.Connection:
-    """
-    Open/create the SQLite database and initialize all required tables.
-
-    The database contains:
-
-        records
-            Every raw JSON message received from the Pico.
-
-        measurements
-            Structured network measurements.
-
-        events
-            Structured network/security events.
-
-    Keeping the raw JSON in records makes the collector easier to extend.
-    If future firmware sends fields that this collector does not yet know
-    about, those fields are still preserved.
-    """
-
-    database_path.parent.mkdir(
+    path.parent.mkdir(
         parents=True,
-        exist_ok=True
+        exist_ok=True,
     )
 
-    connection = sqlite3.connect(
-        database_path
+    conn = sqlite3.connect(
+        path,
+        timeout=10,
     )
 
-    # Better behavior when the dashboard reads while the collector writes.
-    connection.execute(
+    conn.execute(
         "PRAGMA journal_mode=WAL"
     )
 
-    connection.execute(
-        "PRAGMA foreign_keys=ON"
+    conn.execute(
+        "PRAGMA synchronous=NORMAL"
     )
 
-    connection.executescript(
+    return conn
+
+
+def create_schema(conn):
+    conn.executescript(
         """
         CREATE TABLE IF NOT EXISTS records (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
-
             received_at TEXT NOT NULL,
-
-            schema_version INTEGER NOT NULL,
-
-            device_id TEXT NOT NULL,
-
-            record_type TEXT NOT NULL,
-
+            schema_version INTEGER,
+            device_id TEXT,
+            record_type TEXT,
             uptime_ms INTEGER,
-
             payload_json TEXT NOT NULL
         );
 
@@ -96,9 +70,7 @@ def create_database(database_path: Path) -> sqlite3.Connection:
             record_id INTEGER PRIMARY KEY,
 
             received_at TEXT NOT NULL,
-
-            device_id TEXT NOT NULL,
-
+            device_id TEXT,
             uptime_ms INTEGER,
 
             status TEXT,
@@ -109,10 +81,15 @@ def create_database(database_path: Path) -> sqlite3.Connection:
             channel INTEGER,
             rssi_dbm INTEGER,
 
-            gateway TEXT,
+            ip_address TEXT,
 
+            gateway TEXT,
             gateway_rtt_ms INTEGER,
             gateway_loss_pct REAL,
+
+            dns_server TEXT,
+            dns_test_domain TEXT,
+            dns_latency_ms INTEGER,
 
             internet_rtt_ms INTEGER,
 
@@ -145,7 +122,6 @@ def create_database(database_path: Path) -> sqlite3.Connection:
 
             FOREIGN KEY(record_id)
                 REFERENCES records(id)
-                ON DELETE CASCADE
         );
 
 
@@ -153,20 +129,16 @@ def create_database(database_path: Path) -> sqlite3.Connection:
             record_id INTEGER PRIMARY KEY,
 
             received_at TEXT NOT NULL,
-
-            device_id TEXT NOT NULL,
-
+            device_id TEXT,
             uptime_ms INTEGER,
 
-            event_type TEXT NOT NULL,
-
+            event_type TEXT,
             severity TEXT,
 
             details_json TEXT,
 
             FOREIGN KEY(record_id)
                 REFERENCES records(id)
-                ON DELETE CASCADE
         );
 
 
@@ -207,32 +179,61 @@ def create_database(database_path: Path) -> sqlite3.Connection:
         """
     )
 
-    connection.commit()
+    conn.commit()
 
-    return connection
-
-
-# ---------------------------------------------------------------------------
-# Generic raw record storage
-# ---------------------------------------------------------------------------
-
-def insert_raw_record(
-    connection: sqlite3.Connection,
-    received_at: str,
-    message: dict
-) -> int:
-    """
-    Store the complete JSON message.
-
-    Returns the SQLite record ID.
-    """
-
-    payload_json = json.dumps(
-        message,
-        separators=(",", ":")
+    ensure_measurement_columns(
+        conn
     )
 
-    cursor = connection.execute(
+
+def ensure_measurement_columns(conn):
+    """
+    Automatically upgrade an existing PicoNetANALyzer
+    database without deleting historical data.
+    """
+
+    existing = {
+        row[1]
+        for row in conn.execute(
+            "PRAGMA table_info(measurements)"
+        )
+    }
+
+    required = {
+        "ip_address": "TEXT",
+        "dns_server": "TEXT",
+        "dns_test_domain": "TEXT",
+        "dns_latency_ms": "INTEGER",
+    }
+
+    for column, column_type in required.items():
+        if column not in existing:
+            print(
+                f"[DB] Adding measurements.{column}"
+            )
+
+            conn.execute(
+                f"""
+                ALTER TABLE measurements
+                ADD COLUMN {column} {column_type}
+                """
+            )
+
+    conn.commit()
+
+
+def insert_record(
+    conn,
+    record,
+    received_at,
+):
+    payload_json = json.dumps(
+        record,
+        separators=(",", ":"),
+        ensure_ascii=False,
+    )
+
+    cursor = conn.execute(
         """
         INSERT INTO records (
             received_at,
@@ -246,48 +247,49 @@ def insert_raw_record(
         """,
         (
             received_at,
-
-            message.get(
-                "schema",
-                0
-            ),
-
-            message.get(
-                "device_id",
-                "unknown"
-            ),
-
-            message.get(
-                "type",
-                "unknown"
-            ),
-
-            message.get(
-                "uptime_ms"
-            ),
-
+            record.get("schema"),
+            record.get("device_id"),
+            record.get("type"),
+            record.get("uptime_ms"),
             payload_json,
-        )
+        ),
     )
 
-    return cursor.lastrowid
+    record_id = cursor.lastrowid
+
+    if record.get("type") == "measurement":
+        insert_measurement(
+            conn,
+            record_id,
+            record,
+            received_at,
+        )
+
+    elif record.get("type") == "event":
+        insert_event(
+            conn,
+            record_id,
+            record,
+            received_at,
+        )
+
+    conn.commit()
 
 
-# ---------------------------------------------------------------------------
-# Measurement storage
-# ---------------------------------------------------------------------------
+def bool_to_int(value):
+    if value is None:
+        return None
+
+    return 1 if value else 0
+
 
 def insert_measurement(
-    connection: sqlite3.Connection,
-    record_id: int,
-    received_at: str,
-    message: dict
-) -> None:
-    """
-    Store a structured measurement record.
-    """
-
-    connection.execute(
+    conn,
+    record_id,
+    record,
+    received_at,
+):
+    conn.execute(
         """
         INSERT INTO measurements (
             record_id,
@@ -299,14 +301,18 @@ def insert_measurement(
 
             ssid,
             bssid,
-
             channel,
             rssi_dbm,
 
-            gateway,
+            ip_address,
 
+            gateway,
             gateway_rtt_ms,
             gateway_loss_pct,
+
+            dns_server,
+            dns_test_domain,
+            dns_latency_ms,
 
             internet_rtt_ms,
 
@@ -340,10 +346,10 @@ def insert_measurement(
         VALUES (
             ?, ?, ?, ?,
             ?,
-            ?, ?,
-            ?, ?,
+            ?, ?, ?, ?,
             ?,
-            ?, ?,
+            ?, ?, ?,
+            ?, ?, ?,
             ?,
             ?, ?, ?,
             ?, ?,
@@ -358,172 +364,79 @@ def insert_measurement(
         (
             record_id,
             received_at,
+            record.get("device_id"),
+            record.get("uptime_ms"),
 
-            message.get(
-                "device_id",
-                "unknown"
-            ),
+            record.get("status"),
 
-            message.get(
-                "uptime_ms"
-            ),
+            record.get("ssid"),
+            record.get("bssid"),
+            record.get("channel"),
+            record.get("rssi_dbm"),
 
-            message.get(
-                "status"
-            ),
+            record.get("ip_address"),
 
-            message.get(
-                "ssid"
-            ),
+            record.get("gateway"),
+            record.get("gateway_rtt_ms"),
+            record.get("gateway_loss_pct"),
 
-            message.get(
-                "bssid"
-            ),
+            record.get("dns_server"),
+            record.get("dns_test_domain"),
+            record.get("dns_latency_ms"),
 
-            message.get(
-                "channel"
-            ),
+            record.get("internet_rtt_ms"),
 
-            message.get(
-                "rssi_dbm"
-            ),
+            record.get("min_rtt_ms"),
+            record.get("avg_rtt_ms"),
+            record.get("max_rtt_ms"),
 
-            message.get(
-                "gateway"
-            ),
+            record.get("jitter_ms"),
+            record.get("avg_jitter_ms"),
 
-            message.get(
-                "gateway_rtt_ms"
-            ),
+            record.get("packet_loss_pct"),
 
-            message.get(
-                "gateway_loss_pct"
-            ),
+            record.get("samples"),
+            record.get("successful"),
+            record.get("failed"),
 
-            message.get(
-                "internet_rtt_ms"
-            ),
+            record.get("disconnects"),
+            record.get("reconnects"),
+            record.get("reconnect_attempts"),
 
-            message.get(
-                "min_rtt_ms"
-            ),
+            record.get("bssid_changes"),
+            record.get("channel_changes"),
+            record.get("gateway_changes"),
 
-            message.get(
-                "avg_rtt_ms"
-            ),
-
-            message.get(
-                "max_rtt_ms"
-            ),
-
-            message.get(
-                "jitter_ms"
-            ),
-
-            message.get(
-                "avg_jitter_ms"
-            ),
-
-            message.get(
-                "packet_loss_pct"
-            ),
-
-            message.get(
-                "samples"
-            ),
-
-            message.get(
-                "successful"
-            ),
-
-            message.get(
-                "failed"
-            ),
-
-            message.get(
-                "disconnects"
-            ),
-
-            message.get(
-                "reconnects"
-            ),
-
-            message.get(
-                "reconnect_attempts"
-            ),
-
-            message.get(
-                "bssid_changes"
-            ),
-
-            message.get(
-                "channel_changes"
-            ),
-
-            message.get(
-                "gateway_changes"
-            ),
-
-            message.get(
-                "weak_signal_events"
-            ),
-
-            message.get(
-                "high_latency_events"
-            ),
+            record.get("weak_signal_events"),
+            record.get("high_latency_events"),
 
             bool_to_int(
-                message.get(
+                record.get(
                     "weak_signal_active"
                 )
             ),
 
             bool_to_int(
-                message.get(
+                record.get(
                     "high_latency_active"
                 )
             ),
-        )
+        ),
     )
 
-
-# ---------------------------------------------------------------------------
-# Event storage
-# ---------------------------------------------------------------------------
 
 def insert_event(
-    connection: sqlite3.Connection,
-    record_id: int,
-    received_at: str,
-    message: dict
-) -> None:
-    """
-    Store a structured network/security event.
-
-    details_json is deliberately flexible.
-
-    Examples:
-
-        BSSID_CHANGED
-        {
-            "old": "...",
-            "new": "..."
-        }
-
-        HIGH_LATENCY
-        {
-            "metric": "internet_rtt_ms",
-            "value": 352,
-            "threshold": 150
-        }
-    """
-
-    details = message.get(
+    conn,
+    record_id,
+    record,
+    received_at,
+):
+    details = record.get(
         "details",
-        {}
+        {},
     )
 
-    connection.execute(
+    conn.execute(
         """
         INSERT INTO events (
             record_id,
@@ -538,473 +451,258 @@ def insert_event(
         """,
         (
             record_id,
-
             received_at,
-
-            message.get(
-                "device_id",
-                "unknown"
-            ),
-
-            message.get(
-                "uptime_ms"
-            ),
-
-            message.get(
-                "event",
-                "UNKNOWN_EVENT"
-            ),
-
-            message.get(
-                "severity",
-                "info"
-            ),
-
+            record.get("device_id"),
+            record.get("uptime_ms"),
+            record.get("event"),
+            record.get("severity"),
             json.dumps(
                 details,
-                separators=(",", ":")
+                separators=(",", ":"),
+                ensure_ascii=False,
             ),
-        )
+        ),
     )
 
 
-# ---------------------------------------------------------------------------
-# Utility
-# ---------------------------------------------------------------------------
+def process_line(
+    conn,
+    line,
+    verbose=False,
+):
+    line = line.strip()
 
-def bool_to_int(value) -> int:
-    """
-    Convert JSON boolean values to SQLite integer booleans.
-    """
+    if not line:
+        return
 
-    if value is True:
-        return 1
+    if not line.startswith("{"):
+        if verbose:
+            print(
+                f"[SERIAL] {line}"
+            )
 
-    return 0
+        return
 
+    try:
+        record = json.loads(
+            line
+        )
 
-# ---------------------------------------------------------------------------
-# Incoming message processing
-# ---------------------------------------------------------------------------
+    except json.JSONDecodeError as exc:
+        print(
+            f"[WARN] Invalid JSON: {exc}",
+            file=sys.stderr,
+        )
 
-def process_message(
-    connection: sqlite3.Connection,
-    message: dict,
-    verbose: bool = False
-) -> None:
-    """
-    Process one complete JSON message from the Pico.
-    """
+        if verbose:
+            print(
+                f"[RAW] {line}",
+                file=sys.stderr,
+            )
+
+        return
+
+    if not isinstance(
+        record,
+        dict,
+    ):
+        return
 
     received_at = utc_now()
 
-
-    # -----------------------------------------------------------------------
-    # Basic validation
-    # -----------------------------------------------------------------------
-
-    schema_version = message.get(
-        "schema"
+    insert_record(
+        conn,
+        record,
+        received_at,
     )
 
-    if schema_version is None:
-        print(
-            "[WARNING] Ignoring message without schema field",
-            file=sys.stderr
-        )
-
-        return
-
-
-    if not isinstance(
-        schema_version,
-        int
-    ):
-        print(
-            "[WARNING] Invalid schema version",
-            file=sys.stderr
-        )
-
-        return
-
-
-    if schema_version > SUPPORTED_SCHEMA_VERSION:
-        print(
-            "[WARNING] Pico firmware is using "
-            f"schema {schema_version}, but collector "
-            f"only explicitly understands schema "
-            f"{SUPPORTED_SCHEMA_VERSION}. "
-            "Raw JSON will still be preserved.",
-            file=sys.stderr
-        )
-
-
-    record_type = message.get(
+    record_type = record.get(
         "type"
     )
 
-
-    if not record_type:
+    if record_type == "event":
         print(
-            "[WARNING] Ignoring record without type",
-            file=sys.stderr
+            "[EVENT]",
+            received_at,
+            record.get(
+                "severity",
+                "unknown",
+            ).upper(),
+            record.get(
+                "event",
+                "UNKNOWN",
+            ),
+            record.get(
+                "details",
+                {},
+            ),
         )
 
-        return
+    elif (
+        record_type ==
+        "measurement"
+        and verbose
+    ):
+        print(
+            "[MEASUREMENT]",
+            received_at,
+            record.get(
+                "device_id"
+            ),
+            record.get(
+                "status"
+            ),
+            f"IP={record.get('ip_address')}",
+            f"RTT={record.get('internet_rtt_ms')}",
+            f"DNS={record.get('dns_latency_ms')}",
+            f"RSSI={record.get('rssi_dbm')}",
+        )
 
 
-    # -----------------------------------------------------------------------
-    # Store complete original record
-    # -----------------------------------------------------------------------
-
-    record_id = insert_raw_record(
-        connection,
-        received_at,
-        message
+def run_collector(
+    port,
+    baud,
+    database,
+    verbose,
+):
+    conn = open_database(
+        database
     )
 
+    create_schema(
+        conn
+    )
 
-    # -----------------------------------------------------------------------
-    # Measurement
-    # -----------------------------------------------------------------------
-
-    if record_type == "measurement":
-
-        insert_measurement(
-            connection,
-            record_id,
-            received_at,
-            message
-        )
-
-
-        if verbose:
-
-            print(
-                "[MEASUREMENT] "
-                f"{received_at}  "
-                f"device={message.get('device_id')}  "
-                f"status={message.get('status')}  "
-                f"RSSI={message.get('rssi_dbm')} dBm  "
-                f"RTT={message.get('internet_rtt_ms')} ms  "
-                f"jitter={message.get('jitter_ms')} ms  "
-                f"loss={message.get('packet_loss_pct')}%"
-            )
-
-
-    # -----------------------------------------------------------------------
-    # Event
-    # -----------------------------------------------------------------------
-
-    elif record_type == "event":
-
-        insert_event(
-            connection,
-            record_id,
-            received_at,
-            message
-        )
-
-
-        print(
-            "[EVENT] "
-            f"{received_at}  "
-            f"{message.get('severity', 'info').upper()}  "
-            f"{message.get('event', 'UNKNOWN_EVENT')}  "
-            f"{message.get('details', {})}"
-        )
-
-
-    # -----------------------------------------------------------------------
-    # Unknown future record type
-    # -----------------------------------------------------------------------
-
-    else:
-
-        print(
-            "[INFO] Unknown record type "
-            f"'{record_type}' stored in raw records table."
-        )
-
-
-    connection.commit()
-
-
-# ---------------------------------------------------------------------------
-# Serial reader
-# ---------------------------------------------------------------------------
-
-def collect_serial(
-    connection: sqlite3.Connection,
-    port: str,
-    baud: int,
-    verbose: bool
-) -> None:
-    """
-    Open the Pico serial device and continuously process NDJSON records.
-
-    If the Pico disconnects/reboots, the collector automatically tries
-    to reconnect.
-    """
+    print(
+        f"[DB] {database}"
+    )
 
     while True:
-
         try:
-
             print(
-                f"[SERIAL] Opening {port} @ {baud}..."
+                f"[SERIAL] Opening {port} "
+                f"at {baud} baud..."
             )
-
 
             with serial.Serial(
                 port=port,
                 baudrate=baud,
-                timeout=1
-            ) as device:
-
+                timeout=1,
+            ) as serial_port:
                 print(
-                    "[SERIAL] Connected."
+                    f"[SERIAL] Connected to {port}"
                 )
 
-
                 while True:
-
-                    raw_bytes = (
-                        device.readline()
-                    )
-
-
-                    if not raw_bytes:
-                        continue
-
-
-                    raw_line = (
-                        raw_bytes
-                        .decode(
-                            "utf-8",
-                            errors="replace"
-                        )
-                        .strip()
-                    )
-
-
-                    if not raw_line:
-                        continue
-
-
-                                     # Pico telemetry records always begin
-                    # with a JSON object.
-                    #
-                    # This lets us safely ignore any startup
-                    # noise or legacy human-readable serial output.
-
-                    if not raw_line.startswith("{"):
-
-                        if verbose:
-                            print(
-                                f"[SERIAL RAW] {raw_line}"
-                            )
-
-                        continue
-
-
-                    # -------------------------------------------------------
-                    # Parse JSON
-                    # -------------------------------------------------------
-
                     try:
-
-                        message = json.loads(
-                            raw_line
+                        raw = (
+                            serial_port
+                            .readline()
                         )
 
+                    except SerialException:
+                        raise
 
-                    except json.JSONDecodeError as error:
-
-                        print(
-                            "[WARNING] Invalid JSON received:",
-                            file=sys.stderr
-                        )
-
-                        print(
-                            f"          {error}",
-                            file=sys.stderr
-                        )
-
-                        print(
-                            f"          {raw_line}",
-                            file=sys.stderr
-                        )
-
+                    if not raw:
                         continue
 
-
-                    if not isinstance(
-                        message,
-                        dict
-                    ):
-                        print(
-                            "[WARNING] JSON record is not an object",
-                            file=sys.stderr
-                        )
-
-                        continue
-
-
-                    # -------------------------------------------------------
-                    # Store message
-                    # -------------------------------------------------------
-
-                    process_message(
-                        connection,
-                        message,
-                        verbose
+                    line = raw.decode(
+                        "utf-8",
+                        errors="replace",
                     )
 
+                    process_line(
+                        conn,
+                        line,
+                        verbose=verbose,
+                    )
 
-        except SerialException as error:
-
+        except SerialException as exc:
             print(
-                f"[SERIAL] Connection lost: {error}",
-                file=sys.stderr
+                f"[SERIAL] Connection lost: {exc}"
             )
 
             print(
-                "[SERIAL] Retrying in 3 seconds..."
+                "[SERIAL] Retrying in 2 seconds..."
             )
 
-            time.sleep(3)
+            time.sleep(2)
+
+        except KeyboardInterrupt:
+            print(
+                "\nStopping collector."
+            )
+
+            break
+
+        except Exception as exc:
+            print(
+                f"[ERROR] {exc}",
+                file=sys.stderr,
+            )
+
+            print(
+                "[SERIAL] Retrying in 2 seconds..."
+            )
+
+            time.sleep(2)
+
+    conn.close()
 
 
-# ---------------------------------------------------------------------------
-# Command-line arguments
-# ---------------------------------------------------------------------------
-
-def parse_arguments():
-    """
-    Parse collector command-line options.
-    """
-
+def parse_args():
     parser = argparse.ArgumentParser(
         description=(
-            "PicoNetANALyzer telemetry collector. "
-            "Reads NDJSON telemetry from the Pico over "
-            "USB serial and stores it in SQLite."
+            "PicoNetANALyzer USB telemetry collector"
         )
     )
-
 
     parser.add_argument(
         "--port",
-        default="/dev/ttyACM0",
+        default=DEFAULT_PORT,
         help=(
-            "Pico serial device "
-            "(default: /dev/ttyACM0)"
-        )
+            "Serial device "
+            f"(default: {DEFAULT_PORT})"
+        ),
     )
-
 
     parser.add_argument(
         "--baud",
         type=int,
-        default=115200,
+        default=DEFAULT_BAUD,
         help=(
             "Serial baud rate "
-            "(default: 115200)"
-        )
+            f"(default: {DEFAULT_BAUD})"
+        ),
     )
-
 
     parser.add_argument(
         "--db",
-        default="data/piconet.db",
+        default=str(DEFAULT_DB),
         help=(
             "SQLite database path "
-            "(default: data/piconet.db)"
-        )
+            f"(default: {DEFAULT_DB})"
+        ),
     )
-
 
     parser.add_argument(
         "--verbose",
         action="store_true",
-        help=(
-            "Print every measurement received "
-            "instead of only events"
-        )
+        help="Print measurements as they arrive",
     )
-
 
     return parser.parse_args()
 
 
-# ---------------------------------------------------------------------------
-# Main
-# ---------------------------------------------------------------------------
-
 def main():
-    """
-    Collector entry point.
-    """
+    args = parse_args()
 
-    args = parse_arguments()
-
-
-    database_path = Path(
-        args.db
+    run_collector(
+        port=args.port,
+        baud=args.baud,
+        database=args.db,
+        verbose=args.verbose,
     )
-
-
-    connection = create_database(
-        database_path
-    )
-
-
-    print()
-    print("PicoNetANALyzer Collector")
-    print("-------------------------")
-
-    print(
-        f"Serial Port: {args.port}"
-    )
-
-    print(
-        f"Baud Rate:   {args.baud}"
-    )
-
-    print(
-        f"Database:    {database_path}"
-    )
-
-    print()
-
-
-    try:
-
-        collect_serial(
-            connection=connection,
-            port=args.port,
-            baud=args.baud,
-            verbose=args.verbose
-        )
-
-
-    except KeyboardInterrupt:
-
-        print()
-        print(
-            "Stopping collector..."
-        )
-
-
-    finally:
-
-        connection.commit()
-        connection.close()
-
-        print(
-            "Database closed."
-        )
 
 
 if __name__ == "__main__":
