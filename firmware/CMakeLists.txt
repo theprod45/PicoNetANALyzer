@@ -9,6 +9,7 @@ pico_sdk_init()
 add_executable(PicoNetANALyzer
     main.c
     network_events.c
+    telemetry.c
 )
 
 target_include_directories(PicoNetANALyzer PRIVATE

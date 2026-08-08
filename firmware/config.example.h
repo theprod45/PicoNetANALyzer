@@ -1,6 +1,9 @@
 #ifndef CONFIG_H
 #define CONFIG_H
 
+// Device ID
+#define DEVICE_ID "pico-01"
+
 /*
  * PicoNetANALyzer configuration template
  *
