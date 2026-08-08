@@ -8,6 +8,11 @@ pico_sdk_init()
 
 add_executable(PicoNetANALyzer
     main.c
+    network_events.c
+)
+
+target_include_directories(PicoNetANALyzer PRIVATE
+    ${CMAKE_CURRENT_LIST_DIR}
 )
 
 target_link_libraries(PicoNetANALyzer

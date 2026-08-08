@@ -6,7 +6,10 @@
 
 #include "pico/stdlib.h"
 #include "hardware/uart.h"
+
 #include "config.h"
+#include "network_events.h"
+
 
 #define WIZ_UART uart1
 #define WIZ_TX_PIN 4
@@ -30,9 +33,6 @@ typedef struct
 
 /*
  * Send an AT command to the WizFi360.
- *
- * The response is captured in a buffer.
- * Raw AT output is not printed to USB.
  */
 static bool wizfi_command(
     const char *command,
@@ -40,9 +40,6 @@ static bool wizfi_command(
     size_t response_size,
     uint32_t timeout_ms)
 {
-    /*
-     * Remove any old bytes waiting in UART.
-     */
     while (uart_is_readable(WIZ_UART))
     {
         uart_getc(WIZ_UART);
@@ -50,14 +47,20 @@ static bool wizfi_command(
 
     response[0] = '\0';
 
-    /*
-     * Send command.
-     */
-    uart_puts(WIZ_UART, command);
-    uart_puts(WIZ_UART, "\r\n");
+    uart_puts(
+        WIZ_UART,
+        command
+    );
+
+    uart_puts(
+        WIZ_UART,
+        "\r\n"
+    );
 
     absolute_time_t timeout =
-        make_timeout_time_ms(timeout_ms);
+        make_timeout_time_ms(
+            timeout_ms
+        );
 
     size_t pos = 0;
 
@@ -65,7 +68,8 @@ static bool wizfi_command(
     {
         while (uart_is_readable(WIZ_UART))
         {
-            char c = uart_getc(WIZ_UART);
+            char c =
+                uart_getc(WIZ_UART);
 
             if (pos < response_size - 1)
             {
@@ -73,20 +77,28 @@ static bool wizfi_command(
                 response[pos] = '\0';
             }
 
-            /*
-             * Successful AT command.
-             */
-            if (strstr(response, "\r\nOK\r\n") != NULL ||
-                strstr(response, "\nOK\r\n") != NULL)
+            if (
+                strstr(
+                    response,
+                    "\r\nOK\r\n") != NULL
+                ||
+                strstr(
+                    response,
+                    "\nOK\r\n") != NULL
+            )
             {
                 return true;
             }
 
-            /*
-             * Failed AT command.
-             */
-            if (strstr(response, "ERROR") != NULL ||
-                strstr(response, "FAIL") != NULL)
+            if (
+                strstr(
+                    response,
+                    "ERROR") != NULL
+                ||
+                strstr(
+                    response,
+                    "FAIL") != NULL
+            )
             {
                 return false;
             }
@@ -106,9 +118,6 @@ static bool connect_wifi(
     char *response,
     size_t response_size)
 {
-    /*
-     * Station mode.
-     */
     wizfi_command(
         "AT+CWMODE_CUR=1",
         response,
@@ -136,8 +145,7 @@ static bool connect_wifi(
 
 
 /*
- * Get information about the currently
- * associated Wi-Fi access point.
+ * Read current AP information.
  */
 static wifi_info_t get_wifi_info(void)
 {
@@ -155,26 +163,25 @@ static wifi_info_t get_wifi_info(void)
     }
 
     char *line =
-        strstr(response, "+CWJAP_CUR:");
+        strstr(
+            response,
+            "+CWJAP_CUR:"
+        );
 
     if (line == NULL)
     {
         return info;
     }
 
-    /*
-     * Expected:
-     *
-     * +CWJAP_CUR:"SSID","BSSID",channel,RSSI
-     */
-    int result = sscanf(
-        line,
-        "+CWJAP_CUR:\"%63[^\"]\",\"%31[^\"]\",%d,%d",
-        info.ssid,
-        info.bssid,
-        &info.channel,
-        &info.rssi
-    );
+    int result =
+        sscanf(
+            line,
+            "+CWJAP_CUR:\"%63[^\"]\",\"%31[^\"]\",%d,%d",
+            info.ssid,
+            info.bssid,
+            &info.channel,
+            &info.rssi
+        );
 
     if (result == 4)
     {
@@ -186,7 +193,7 @@ static wifi_info_t get_wifi_info(void)
 
 
 /*
- * Read the default gateway IP.
+ * Get default gateway IP.
  */
 static bool get_gateway(
     char *gateway,
@@ -207,7 +214,10 @@ static bool get_gateway(
         "+CIPSTA_CUR:gateway:\"";
 
     char *start =
-        strstr(response, prefix);
+        strstr(
+            response,
+            prefix
+        );
 
     if (start == NULL)
     {
@@ -217,7 +227,10 @@ static bool get_gateway(
     start += strlen(prefix);
 
     char *end =
-        strchr(start, '"');
+        strchr(
+            start,
+            '"'
+        );
 
     if (end == NULL)
     {
@@ -229,7 +242,8 @@ static bool get_gateway(
 
     if (length >= size)
     {
-        length = size - 1;
+        length =
+            size - 1;
     }
 
     memcpy(
@@ -247,12 +261,11 @@ static bool get_gateway(
 /*
  * Ping a host.
  *
- * Returns:
- *
- * >= 0    RTT in milliseconds
- * -1      failure / timeout
+ * Returns RTT in milliseconds,
+ * or -1 on failure.
  */
-static int ping_host(const char *host)
+static int ping_host(
+    const char *host)
 {
     char response[RESPONSE_SIZE];
     char command[128];
@@ -273,37 +286,35 @@ static int ping_host(const char *host)
         return -1;
     }
 
-    /*
-     * Successful response:
-     *
-     * +23
-     *
-     * OK
-     */
     char *plus =
-        strchr(response, '+');
+        strchr(
+            response,
+            '+'
+        );
 
     if (plus == NULL)
     {
         return -1;
     }
 
-    /*
-     * Reject responses such as +timeout.
-     */
-    if (!isdigit((unsigned char)plus[1]))
+    if (!isdigit(
+            (unsigned char)
+            plus[1]))
     {
         return -1;
     }
 
-    return atoi(plus + 1);
+    return atoi(
+        plus + 1
+    );
 }
 
 
 /*
- * Print a millisecond value as HH:MM:SS.
+ * Print milliseconds as HH:MM:SS.
  */
-static void print_hms(uint64_t milliseconds)
+static void print_hms(
+    uint64_t milliseconds)
 {
     uint64_t seconds =
         milliseconds / 1000ULL;
@@ -312,7 +323,8 @@ static void print_hms(uint64_t milliseconds)
         seconds / 3600ULL;
 
     uint64_t minutes =
-        (seconds % 3600ULL) / 60ULL;
+        (seconds % 3600ULL)
+        / 60ULL;
 
     uint64_t secs =
         seconds % 60ULL;
@@ -327,16 +339,17 @@ static void print_hms(uint64_t milliseconds)
 
 
 /*
- * Print seconds with two decimal places
- * without depending on the system clock.
+ * Print milliseconds as seconds.
  */
-static void print_seconds(uint64_t milliseconds)
+static void print_seconds(
+    uint64_t milliseconds)
 {
     uint64_t whole =
         milliseconds / 1000ULL;
 
     uint64_t fraction =
-        (milliseconds % 1000ULL) / 10ULL;
+        (milliseconds % 1000ULL)
+        / 10ULL;
 
     printf(
         "%llu.%02llu s",
@@ -355,8 +368,9 @@ int main(void)
 
     sleep_ms(3000);
 
+
     /*
-     * UART between RP2040 and WizFi360.
+     * WizFi360 UART.
      */
     uart_init(
         WIZ_UART,
@@ -379,7 +393,7 @@ int main(void)
 
 
     /*
-     * Verify WizFi360 is responding.
+     * Verify WizFi360.
      */
     if (!wizfi_command(
             "AT",
@@ -387,9 +401,17 @@ int main(void)
             sizeof(response),
             1000))
     {
-        printf("PicoNetANALyzer\n");
-        printf("----------------\n");
-        printf("Status: WizFi360 not responding\n");
+        printf(
+            "PicoNetANALyzer\n"
+        );
+
+        printf(
+            "----------------\n"
+        );
+
+        printf(
+            "Status: WizFi360 not responding\n"
+        );
 
         while (true)
         {
@@ -410,22 +432,36 @@ int main(void)
 
 
     /*
-     * Initial Wi-Fi connection.
-     *
-     * Continue retrying instead of permanently
-     * stopping if ASK4 is temporarily unavailable.
+     * Connect to Wi-Fi.
      */
     while (!connect_wifi(
         response,
         sizeof(response)))
     {
-        printf("\033[2J\033[H");
+        printf(
+            "\033[2J\033[H"
+        );
 
-        printf("PicoNetANALyzer\n");
-        printf("----------------\n");
-        printf("Status:       CONNECTING\n");
-        printf("Network:      %s\n", WIFI_SSID);
-        printf("\nRetrying...\n");
+        printf(
+            "PicoNetANALyzer\n"
+        );
+
+        printf(
+            "----------------\n"
+        );
+
+        printf(
+            "Status:       CONNECTING\n"
+        );
+
+        printf(
+            "Network:      %s\n",
+            WIFI_SSID
+        );
+
+        printf(
+            "\nRetrying...\n"
+        );
 
         fflush(stdout);
 
@@ -434,9 +470,10 @@ int main(void)
 
 
     /*
-     * Get gateway after initial connection.
+     * Gateway information.
      */
-    char gateway[32] = "Unknown";
+    char gateway[32] =
+        "Unknown";
 
     if (!get_gateway(
             gateway,
@@ -451,7 +488,17 @@ int main(void)
 
 
     /*
-     * General probe statistics.
+     * Initialize network event detector.
+     */
+    network_events_t events;
+
+    network_events_init(
+        &events
+    );
+
+
+    /*
+     * General statistics.
      */
     uint32_t samples = 0;
 
@@ -466,36 +513,56 @@ int main(void)
     int max_rtt = -1;
 
     uint64_t total_rtt = 0;
-    uint32_t successful_rtt_samples = 0;
+
+    uint32_t successful_rtt_samples =
+        0;
 
 
     /*
      * Jitter statistics.
      */
-    int previous_internet_ping = -1;
-    int current_jitter = -1;
+    int previous_internet_ping =
+        -1;
 
-    uint64_t total_jitter = 0;
-    uint32_t jitter_samples = 0;
+    int current_jitter =
+        -1;
+
+    uint64_t total_jitter =
+        0;
+
+    uint32_t jitter_samples =
+        0;
 
 
     /*
      * Disconnect/reconnect statistics.
      */
-    bool previous_wifi_connected = true;
-    bool outage_active = false;
+    bool previous_wifi_connected =
+        true;
 
-    uint32_t disconnect_count = 0;
-    uint32_t reconnect_count = 0;
-    uint32_t reconnect_attempts = 0;
+    bool outage_active =
+        false;
 
-    uint64_t outage_start_ms = 0;
+    uint32_t disconnect_count =
+        0;
 
-    uint64_t last_disconnect_at_ms = 0;
+    uint32_t reconnect_count =
+        0;
 
-    uint64_t last_reconnect_duration_ms = 0;
+    uint32_t reconnect_attempts =
+        0;
 
-    uint64_t total_outage_ms = 0;
+    uint64_t outage_start_ms =
+        0;
+
+    uint64_t last_disconnect_at_ms =
+        0;
+
+    uint64_t last_reconnect_duration_ms =
+        0;
+
+    uint64_t total_outage_ms =
+        0;
 
 
     while (true)
@@ -503,12 +570,12 @@ int main(void)
         samples++;
 
         uint64_t now_ms =
-            time_us_64() / 1000ULL;
+            time_us_64()
+            / 1000ULL;
 
 
         /*
-         * Check whether we're still associated
-         * with the Wi-Fi access point.
+         * Read current Wi-Fi state.
          */
         wifi_info_t wifi =
             get_wifi_info();
@@ -518,14 +585,17 @@ int main(void)
 
 
         /*
-         * Detect connected -> disconnected edge.
+         * Detect Wi-Fi disconnect.
          */
-        if (!wifi_connected &&
-            previous_wifi_connected)
+        if (
+            !wifi_connected &&
+            previous_wifi_connected
+        )
         {
             disconnect_count++;
 
-            outage_active = true;
+            outage_active =
+                true;
 
             outage_start_ms =
                 now_ms;
@@ -536,13 +606,15 @@ int main(void)
 
 
         /*
-         * If disconnected, attempt to reconnect.
+         * Attempt reconnect.
          */
         if (!wifi_connected)
         {
             reconnect_attempts++;
 
-            sleep_ms(RECONNECT_DELAY_MS);
+            sleep_ms(
+                RECONNECT_DELAY_MS
+            );
 
             bool reconnect_result =
                 connect_wifi(
@@ -552,10 +624,6 @@ int main(void)
 
             if (reconnect_result)
             {
-                /*
-                 * Verify association instead of
-                 * trusting only the join command.
-                 */
                 wifi =
                     get_wifi_info();
 
@@ -566,16 +634,16 @@ int main(void)
 
 
         /*
-         * Detect successful recovery.
-         *
-         * This also handles the case where the
-         * WizFi360 reconnects by itself.
+         * Successful recovery.
          */
-        if (wifi_connected &&
-            outage_active)
+        if (
+            wifi_connected &&
+            outage_active
+        )
         {
             uint64_t recovered_at_ms =
-                time_us_64() / 1000ULL;
+                time_us_64()
+                / 1000ULL;
 
             last_reconnect_duration_ms =
                 recovered_at_ms -
@@ -586,11 +654,12 @@ int main(void)
 
             reconnect_count++;
 
-            outage_active = false;
+            outage_active =
+                false;
+
 
             /*
-             * DHCP information may have changed,
-             * so refresh the gateway.
+             * DHCP/gateway may have changed.
              */
             snprintf(
                 gateway,
@@ -606,31 +675,61 @@ int main(void)
 
 
         /*
-         * Measure network only while associated.
+         * BSSID event detection.
+         *
+         * First BSSID establishes the baseline.
+         * Later changes increment the event count.
          */
-        int gateway_ping = -1;
-        int internet_ping = -1;
+        bool bssid_changed =
+            false;
 
-        if (wifi_connected)
+        if (
+            wifi_connected &&
+            wifi.valid
+        )
         {
-            if (strcmp(
-                    gateway,
-                    "Unknown") != 0)
-            {
-                gateway_ping =
-                    ping_host(gateway);
-            }
-
-            internet_ping =
-                ping_host(INTERNET_TARGET);
+            bssid_changed =
+                network_events_update_bssid(
+                    &events,
+                    wifi.bssid,
+                    time_us_64()
+                        / 1000ULL
+                );
         }
 
 
         /*
-         * Count failures.
-         *
-         * A Wi-Fi outage counts as an Internet
-         * reachability failure too.
+         * Network measurements.
+         */
+        int gateway_ping =
+            -1;
+
+        int internet_ping =
+            -1;
+
+        if (wifi_connected)
+        {
+            if (
+                strcmp(
+                    gateway,
+                    "Unknown") != 0
+            )
+            {
+                gateway_ping =
+                    ping_host(
+                        gateway
+                    );
+            }
+
+            internet_ping =
+                ping_host(
+                    INTERNET_TARGET
+                );
+        }
+
+
+        /*
+         * Failure counters.
          */
         if (gateway_ping < 0)
         {
@@ -645,52 +744,58 @@ int main(void)
 
         /*
          * RTT statistics.
-         *
-         * Failed probes are NOT included
-         * in RTT averages.
          */
         if (internet_ping >= 0)
         {
-            if (min_rtt < 0 ||
-                internet_ping < min_rtt)
+            if (
+                min_rtt < 0 ||
+                internet_ping < min_rtt
+            )
             {
                 min_rtt =
                     internet_ping;
             }
 
-            if (max_rtt < 0 ||
-                internet_ping > max_rtt)
+            if (
+                max_rtt < 0 ||
+                internet_ping > max_rtt
+            )
             {
                 max_rtt =
                     internet_ping;
             }
 
             total_rtt +=
-                (uint64_t)internet_ping;
+                (uint64_t)
+                internet_ping;
 
             successful_rtt_samples++;
         }
 
 
-        /*
-         * Average RTT.
-         */
-        float average_rtt = 0.0f;
+        float average_rtt =
+            0.0f;
 
-        if (successful_rtt_samples > 0)
+        if (
+            successful_rtt_samples > 0
+        )
         {
             average_rtt =
                 (float)total_rtt /
-                (float)successful_rtt_samples;
+                (float)
+                successful_rtt_samples;
         }
 
 
         /*
-         * Current jitter.
+         * Jitter.
          */
         if (internet_ping >= 0)
         {
-            if (previous_internet_ping >= 0)
+            if (
+                previous_internet_ping
+                >= 0
+            )
             {
                 current_jitter =
                     abs(
@@ -699,13 +804,15 @@ int main(void)
                     );
 
                 total_jitter +=
-                    (uint64_t)current_jitter;
+                    (uint64_t)
+                    current_jitter;
 
                 jitter_samples++;
             }
             else
             {
-                current_jitter = -1;
+                current_jitter =
+                    -1;
             }
 
             previous_internet_ping =
@@ -713,49 +820,50 @@ int main(void)
         }
         else
         {
-            /*
-             * Break the consecutive RTT chain
-             * during an outage.
-             */
-            current_jitter = -1;
-            previous_internet_ping = -1;
+            current_jitter =
+                -1;
+
+            previous_internet_ping =
+                -1;
         }
 
 
-        /*
-         * Average jitter.
-         */
-        float average_jitter = 0.0f;
+        float average_jitter =
+            0.0f;
 
         if (jitter_samples > 0)
         {
             average_jitter =
-                (float)total_jitter /
-                (float)jitter_samples;
+                (float)
+                total_jitter /
+                (float)
+                jitter_samples;
         }
 
 
         /*
-         * Internet packet loss.
+         * Packet-loss statistics.
          */
         float internet_loss =
-            ((float)internet_failures /
-             (float)samples) * 100.0f;
+            ((float)
+                internet_failures /
+             (float)samples)
+            * 100.0f;
 
-
-        /*
-         * Gateway failure percentage.
-         */
         float gateway_loss =
-            ((float)gateway_failures /
-             (float)samples) * 100.0f;
+            ((float)
+                gateway_failures /
+             (float)samples)
+            * 100.0f;
 
 
         uint64_t display_now_ms =
-            time_us_64() / 1000ULL;
+            time_us_64()
+            / 1000ULL;
 
 
-        uint64_t current_outage_ms = 0;
+        uint64_t current_outage_ms =
+            0;
 
         if (outage_active)
         {
@@ -766,20 +874,27 @@ int main(void)
 
 
         /*
-         * Clear terminal.
+         * Clear serial terminal.
          */
-        printf("\033[2J\033[H");
+        printf(
+            "\033[2J\033[H"
+        );
 
 
         /*
          * Title.
          */
-        printf("PicoNetANALyzer\n");
-        printf("----------------\n");
+        printf(
+            "PicoNetANALyzer\n"
+        );
+
+        printf(
+            "----------------\n"
+        );
 
 
         /*
-         * Overall status.
+         * Status.
          */
         if (!wifi_connected)
         {
@@ -812,8 +927,10 @@ int main(void)
          */
         printf("\n");
 
-        if (wifi_connected &&
-            wifi.valid)
+        if (
+            wifi_connected &&
+            wifi.valid
+        )
         {
             printf(
                 "SSID:         %s\n",
@@ -837,10 +954,21 @@ int main(void)
         }
         else
         {
-            printf("SSID:         --\n");
-            printf("BSSID:        --\n");
-            printf("Channel:      --\n");
-            printf("RSSI:         --\n");
+            printf(
+                "SSID:         --\n"
+            );
+
+            printf(
+                "BSSID:        --\n"
+            );
+
+            printf(
+                "Channel:      --\n"
+            );
+
+            printf(
+                "RSSI:         --\n"
+            );
         }
 
 
@@ -894,10 +1022,9 @@ int main(void)
         }
 
 
-        /*
-         * RTT history.
-         */
-        if (successful_rtt_samples > 0)
+        if (
+            successful_rtt_samples > 0
+        )
         {
             printf(
                 "Min RTT:      %d ms\n",
@@ -916,9 +1043,17 @@ int main(void)
         }
         else
         {
-            printf("Min RTT:      --\n");
-            printf("Avg RTT:      --\n");
-            printf("Max RTT:      --\n");
+            printf(
+                "Min RTT:      --\n"
+            );
+
+            printf(
+                "Avg RTT:      --\n"
+            );
+
+            printf(
+                "Max RTT:      --\n"
+            );
         }
 
 
@@ -962,25 +1097,101 @@ int main(void)
 
 
         /*
-         * Connection event statistics.
+         * NEW: BSSID/AP events.
          */
         printf("\n");
-        printf("Connection Events\n");
-        printf("-----------------\n");
+
+        printf(
+            "Network Events\n"
+        );
+
+        printf(
+            "--------------\n"
+        );
+
+        printf(
+            "BSSID Changes:%lu\n",
+            (unsigned long)
+            events.bssid_change_count
+        );
+
+
+        if (
+            events.bssid_change_count > 0
+        )
+        {
+            printf(
+                "Previous AP:  %s\n",
+                events.previous_bssid
+            );
+
+            printf(
+                "Last Change:  "
+            );
+
+            print_hms(
+                events.last_bssid_change_ms
+            );
+
+            printf(
+                " uptime\n"
+            );
+        }
+        else
+        {
+            printf(
+                "Previous AP:  --\n"
+            );
+
+            printf(
+                "Last Change:  --\n"
+            );
+        }
+
+
+        if (bssid_changed)
+        {
+            printf(
+                "BSSID Event:  CHANGED\n"
+            );
+        }
+        else
+        {
+            printf(
+                "BSSID Event:  none\n"
+            );
+        }
+
+
+        /*
+         * Connection events.
+         */
+        printf("\n");
+
+        printf(
+            "Connection Events\n"
+        );
+
+        printf(
+            "-----------------\n"
+        );
 
         printf(
             "Disconnects:  %lu\n",
-            (unsigned long)disconnect_count
+            (unsigned long)
+            disconnect_count
         );
 
         printf(
             "Reconnects:   %lu\n",
-            (unsigned long)reconnect_count
+            (unsigned long)
+            reconnect_count
         );
 
         printf(
             "Reconnect Try:%lu\n",
-            (unsigned long)reconnect_attempts
+            (unsigned long)
+            reconnect_attempts
         );
 
 
@@ -1058,25 +1269,26 @@ int main(void)
 
 
         /*
-         * Runtime information.
+         * Runtime.
          */
         printf("\n");
 
         printf(
             "Samples:      %lu\n",
-            (unsigned long)samples
+            (unsigned long)
+            samples
         );
 
         printf(
             "Successful:   %lu\n",
             (unsigned long)
-                successful_rtt_samples
+            successful_rtt_samples
         );
 
         printf(
             "Failed:       %lu\n",
             (unsigned long)
-                internet_failures
+            internet_failures
         );
 
         printf(
@@ -1089,12 +1301,10 @@ int main(void)
 
         printf("\n");
 
+
         fflush(stdout);
 
 
-        /*
-         * Remember state for edge detection.
-         */
         previous_wifi_connected =
             wifi_connected;
 
