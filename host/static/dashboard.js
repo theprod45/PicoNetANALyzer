@@ -1,6 +1,27 @@
 const POLL_INTERVAL_MS = 2000;
+
 const HISTORY_LIMIT = 180;
 const EVENT_LIMIT = 100;
+
+
+/*
+ * ================================================================
+ * Rolling latency configuration
+ * ================================================================
+ *
+ * 60 samples at a 5-second measurement interval is approximately
+ * a 5-minute rolling window.
+ */
+
+const ROLLING_LATENCY_WINDOW = 60;
+
+
+/*
+ * Don't display a percentile until we have enough samples for it
+ * to be reasonably meaningful.
+ */
+
+const ROLLING_LATENCY_MIN_SAMPLES = 10;
 
 
 let selectedDevice = null;
@@ -29,12 +50,13 @@ function setText(id, value) {
 function formatMs(value) {
     if (
         value === null ||
-        value === undefined
+        value === undefined ||
+        Number.isNaN(Number(value))
     ) {
         return "--";
     }
 
-    return `${value} ms`;
+    return `${Number(value).toFixed(1)} ms`;
 }
 
 
@@ -55,7 +77,8 @@ function formatTime(value) {
         return "--";
     }
 
-    const date = new Date(value);
+    const date =
+        new Date(value);
 
     if (
         Number.isNaN(
@@ -69,11 +92,16 @@ function formatTime(value) {
 }
 
 
-function apiUrl(path, parameters = {}) {
-    const url = new URL(
-        path,
-        window.location.origin
-    );
+function apiUrl(
+    path,
+    parameters = {}
+) {
+    const url =
+        new URL(
+            path,
+            window.location.origin
+        );
+
 
     if (selectedDevice) {
         url.searchParams.set(
@@ -81,6 +109,7 @@ function apiUrl(path, parameters = {}) {
             selectedDevice
         );
     }
+
 
     for (
         const [key, value]
@@ -98,17 +127,20 @@ function apiUrl(path, parameters = {}) {
         }
     }
 
+
     return url.toString();
 }
 
 
 async function getJson(url) {
-    const response = await fetch(
-        url,
-        {
-            cache: "no-store"
-        }
-    );
+    const response =
+        await fetch(
+            url,
+            {
+                cache: "no-store"
+            }
+        );
+
 
     if (!response.ok) {
         throw new Error(
@@ -116,7 +148,176 @@ async function getJson(url) {
         );
     }
 
+
     return response.json();
+}
+
+
+/*
+ * ================================================================
+ * Percentile calculations
+ * ================================================================
+ */
+
+
+/*
+ * Linear-interpolated percentile.
+ *
+ * Example:
+ *
+ * percentile([10, 20, 30, 40], 95)
+ */
+function percentile(
+    values,
+    percentileValue
+) {
+    if (
+        !Array.isArray(values) ||
+        values.length === 0
+    ) {
+        return null;
+    }
+
+
+    const sorted =
+        [...values].sort(
+            (a, b) => a - b
+        );
+
+
+    if (sorted.length === 1) {
+        return sorted[0];
+    }
+
+
+    const position =
+        (
+            percentileValue /
+            100
+        )
+        *
+        (
+            sorted.length - 1
+        );
+
+
+    const lowerIndex =
+        Math.floor(position);
+
+
+    const upperIndex =
+        Math.ceil(position);
+
+
+    if (
+        lowerIndex ===
+        upperIndex
+    ) {
+        return sorted[
+            lowerIndex
+        ];
+    }
+
+
+    const fraction =
+        position -
+        lowerIndex;
+
+
+    return (
+        sorted[lowerIndex]
+        +
+        (
+            sorted[upperIndex]
+            -
+            sorted[lowerIndex]
+        )
+        *
+        fraction
+    );
+}
+
+
+/*
+ * Calculate one rolling percentile value for every measurement.
+ *
+ * The rolling window contains the most recent 60 measurement
+ * records. Failed/null Internet RTT samples are ignored when
+ * calculating the percentile.
+ */
+
+function calculateRollingPercentile(
+    measurements,
+    percentileValue
+) {
+    const output = [];
+
+
+    for (
+        let index = 0;
+        index < measurements.length;
+        index++
+    ) {
+        const start =
+            Math.max(
+                0,
+                index
+                -
+                ROLLING_LATENCY_WINDOW
+                +
+                1
+            );
+
+
+        const windowMeasurements =
+            measurements.slice(
+                start,
+                index + 1
+            );
+
+
+        const validRtts =
+            windowMeasurements
+                .map(
+                    measurement =>
+                        measurement
+                            .internet_rtt_ms
+                )
+                .filter(
+                    value =>
+                        value !== null &&
+                        value !== undefined &&
+                        Number(value) >= 0
+                )
+                .map(
+                    value =>
+                        Number(value)
+                );
+
+
+        if (
+            validRtts.length
+            <
+            ROLLING_LATENCY_MIN_SAMPLES
+        ) {
+            output.push(
+                null
+            );
+
+            continue;
+        }
+
+
+        output.push(
+            percentile(
+                validRtts,
+                percentileValue
+            )
+        );
+    }
+
+
+    return output;
 }
 
 
@@ -130,7 +331,7 @@ function makeLineChart(
     canvasId,
     label,
     yAxisText,
-    color,
+    color
 ) {
     return new Chart(
         element(canvasId),
@@ -144,11 +345,11 @@ function makeLineChart(
                     {
                         label: label,
                         data: [],
-                        
-						borderColor: color,
-						backgroundColor: color,
-						pointBackgroundColor: color,
-						
+
+                        borderColor: color,
+                        backgroundColor: color,
+                        pointBackgroundColor: color,
+
                         tension: 0.2,
                         pointRadius: 1,
                         borderWidth: 2,
@@ -195,44 +396,157 @@ function makeLineChart(
 }
 
 
-const rttChart = makeLineChart(
-    "rttChart",
-    "Internet RTT",
-    "ms",
-    "#60a5fa"
-);
+/*
+ * ================================================================
+ * Internet RTT chart
+ * ================================================================
+ *
+ * Unlike the other charts, RTT has three series:
+ *
+ * Raw RTT
+ * Rolling P95
+ * Rolling P99
+ */
+
+const rttChart =
+    new Chart(
+        element("rttChart"),
+        {
+            type: "line",
+
+            data: {
+                labels: [],
+
+                datasets: [
+                    {
+                        label: "Internet RTT",
+                        data: [],
+
+                        borderColor: "#60a5fa",
+                        backgroundColor: "#60a5fa",
+                        pointBackgroundColor: "#60a5fa",
+
+                        tension: 0.15,
+                        pointRadius: 1,
+                        borderWidth: 2,
+
+                        spanGaps: false,
+                    },
+
+                    {
+                        label: "Rolling P95",
+                        data: [],
+
+                        borderColor: "#f59e0b",
+                        backgroundColor: "#f59e0b",
+                        pointBackgroundColor: "#f59e0b",
+
+                        tension: 0.2,
+                        pointRadius: 0,
+                        borderWidth: 2,
+
+                        spanGaps: false,
+                    },
+
+                    {
+                        label: "Rolling P99",
+                        data: [],
+
+                        borderColor: "#ef4444",
+                        backgroundColor: "#ef4444",
+                        pointBackgroundColor: "#ef4444",
+
+                        tension: 0.2,
+                        pointRadius: 0,
+                        borderWidth: 2,
+
+                        spanGaps: false,
+                    }
+                ]
+            },
+
+            options: {
+                responsive: true,
+                maintainAspectRatio: false,
+
+                animation: false,
+
+                interaction: {
+                    intersect: false,
+                    mode: "index",
+                },
+
+                plugins: {
+                    legend: {
+                        display: true,
+
+                        labels: {
+                            usePointStyle: true,
+                            boxWidth: 8,
+                        }
+                    }
+                },
+
+                scales: {
+                    x: {
+                        ticks: {
+                            maxTicksLimit: 8,
+                        }
+                    },
+
+                    y: {
+                        beginAtZero: true,
+
+                        title: {
+                            display: true,
+                            text: "ms",
+                        }
+                    }
+                }
+            }
+        }
+    );
 
 
-const dnsLatencyChart = makeLineChart(
-    "dnsLatencyChart",
-    "DNS Latency",
-    "ms",
-    "#a78bfa"
-);
+/*
+ * Other graphs.
+ */
+
+const dnsLatencyChart =
+    makeLineChart(
+        "dnsLatencyChart",
+        "DNS Latency",
+        "ms",
+        "#a78bfa"
+    );
 
 
+const rssiChart =
+    makeLineChart(
+        "rssiChart",
+        "RSSI",
+        "dBm",
+        "#36d399"
+    );
 
-const rssiChart = makeLineChart(
-    "rssiChart",
-    "RSSI",
-    "dBm",
-    "#36d399"
-);
+
+const jitterChart =
+    makeLineChart(
+        "jitterChart",
+        "Jitter",
+        "ms",
+        "#f7c948"
+    );
 
 
-const jitterChart = makeLineChart(
-    "jitterChart",
-    "Jitter",
-    "ms",
-    "#f7c948"
-);
+const lossChart =
+    makeLineChart(
+        "lossChart",
+        "Packet Loss",
+        "%",
+        "#ff6b6b"
+    );
 
-const lossChart = makeLineChart(
-    "lossChart",
-    "Packet Loss",
-    "%",
-    "#ff6b6b"
-);
 
 /*
  * ================================================================
@@ -241,18 +555,20 @@ const lossChart = makeLineChart(
  */
 
 async function loadDevices() {
-    const data = await getJson(
-        "/api/devices"
-    );
-
-    const devices = (
-        data.devices || []
-    );
+    const data =
+        await getJson(
+            "/api/devices"
+        );
 
 
-    const selector = element(
-        "deviceSelector"
-    );
+    const devices =
+        data.devices || [];
+
+
+    const selector =
+        element(
+            "deviceSelector"
+        );
 
 
     const previousValue =
@@ -262,19 +578,25 @@ async function loadDevices() {
     selector.innerHTML = "";
 
 
-    if (devices.length === 0) {
+    if (
+        devices.length === 0
+    ) {
         const option =
             document.createElement(
                 "option"
             );
 
+
         option.value = "";
+
         option.textContent =
             "No devices";
+
 
         selector.appendChild(
             option
         );
+
 
         selectedDevice = null;
 
@@ -282,17 +604,23 @@ async function loadDevices() {
     }
 
 
-    for (const device of devices) {
+    for (
+        const device
+        of devices
+    ) {
         const option =
             document.createElement(
                 "option"
             );
 
+
         option.value =
             device.device_id;
 
+
         option.textContent =
             device.device_id;
+
 
         selector.appendChild(
             option
@@ -331,6 +659,7 @@ function updateExportLinks() {
             "exportMeasurements"
         );
 
+
     const events =
         element(
             "exportEvents"
@@ -352,34 +681,40 @@ function updateExportLinks() {
 
 /*
  * ================================================================
- * Status card
+ * Status
  * ================================================================
  */
 
 function statusClass(status) {
-    const critical = new Set([
-        "DISCONNECTED",
-        "INTERNET_OUTAGE",
-    ]);
+    const critical =
+        new Set([
+            "DISCONNECTED",
+            "INTERNET_OUTAGE",
+        ]);
 
 
-    const warning = new Set([
-        "LOCAL_NETWORK_ISSUE",
-        "INTERNET_ISSUE",
-        "DNS_FAILURE",
-        "HIGH_PACKET_LOSS",
-        "HIGH_LATENCY",
-        "HIGH_JITTER",
-        "WEAK_SIGNAL",
-    ]);
+    const warning =
+        new Set([
+            "LOCAL_NETWORK_ISSUE",
+            "INTERNET_ISSUE",
+            "DNS_FAILURE",
+            "HIGH_PACKET_LOSS",
+            "HIGH_LATENCY",
+            "HIGH_JITTER",
+            "WEAK_SIGNAL",
+        ]);
 
 
-    if (critical.has(status)) {
+    if (
+        critical.has(status)
+    ) {
         return "status-critical";
     }
 
 
-    if (warning.has(status)) {
+    if (
+        warning.has(status)
+    ) {
         return "status-warning";
     }
 
@@ -394,15 +729,17 @@ async function updateStatus() {
     }
 
 
-    const latest = await getJson(
-        apiUrl(
-            "/api/status"
-        )
-    );
+    const latest =
+        await getJson(
+            apiUrl(
+                "/api/status"
+            )
+        );
 
 
     const status =
-        latest.status || "UNKNOWN";
+        latest.status ||
+        "UNKNOWN";
 
 
     const statusElement =
@@ -418,7 +755,7 @@ async function updateStatus() {
     statusElement.classList.remove(
         "status-online",
         "status-warning",
-        "status-critical",
+        "status-critical"
     );
 
 
@@ -434,8 +771,9 @@ async function updateStatus() {
 
 
     /*
-     * Device / IP.
+     * Device.
      */
+
     setText(
         "deviceIp",
         latest.ip_address ||
@@ -454,6 +792,7 @@ async function updateStatus() {
     /*
      * RSSI.
      */
+
     setText(
         "rssiValue",
         latest.rssi_dbm == null
@@ -462,15 +801,10 @@ async function updateStatus() {
     );
 
 
-    setText(
-        "rssiDetail",
-        "RSSI"
-    );
-
-
     /*
-     * Internet RTT.
+     * RTT.
      */
+
     setText(
         "rttValue",
         formatMs(
@@ -484,14 +818,12 @@ async function updateStatus() {
         (
             `Min ${formatMs(
                 latest.min_rtt_ms
-            )} / ` +
+            )} / `
+            +
             `Avg ${formatMs(
-                latest.avg_rtt_ms == null
-                    ? null
-                    : Number(
-                        latest.avg_rtt_ms
-                    ).toFixed(1)
-            )} / ` +
+                latest.avg_rtt_ms
+            )} / `
+            +
             `Max ${formatMs(
                 latest.max_rtt_ms
             )}`
@@ -502,6 +834,7 @@ async function updateStatus() {
     /*
      * DNS.
      */
+
     setText(
         "dnsLatency",
         formatMs(
@@ -535,7 +868,8 @@ async function updateStatus() {
     setText(
         "dnsChartServer",
         (
-            `Resolver: ${resolver} • ` +
+            `Resolver: ${resolver} • `
+            +
             `Query: ${testDomain}`
         )
     );
@@ -544,6 +878,7 @@ async function updateStatus() {
     /*
      * Jitter.
      */
+
     setText(
         "jitterValue",
         formatMs(
@@ -555,25 +890,19 @@ async function updateStatus() {
     setText(
         "jitterAverage",
         (
-            "Average: " +
-            (
-                latest.avg_jitter_ms ==
-                null
-                    ? "--"
-                    : `${
-                        Number(
-                            latest
-                                .avg_jitter_ms
-                        ).toFixed(1)
-                    } ms`
+            "Average: "
+            +
+            formatMs(
+                latest.avg_jitter_ms
             )
         )
     );
 
 
     /*
-     * Packet loss.
+     * Loss.
      */
+
     setText(
         "lossValue",
         formatPercent(
@@ -583,8 +912,9 @@ async function updateStatus() {
 
 
     /*
-     * Access point.
+     * AP.
      */
+
     setText(
         "channelValue",
         latest.channel == null
@@ -604,6 +934,7 @@ async function updateStatus() {
     /*
      * Gateway.
      */
+
     setText(
         "gatewayRtt",
         formatMs(
@@ -621,8 +952,9 @@ async function updateStatus() {
 
 
     /*
-     * Reconnects.
+     * Wi-Fi events.
      */
+
     setText(
         "reconnectValue",
         latest.reconnects ?? "--"
@@ -642,14 +974,14 @@ async function updateStatus() {
 
 /*
  * ================================================================
- * Historical graphs
+ * Historical measurements
  * ================================================================
  */
 
 function updateChart(
     chart,
     labels,
-    values,
+    values
 ) {
     chart.data.labels =
         labels;
@@ -671,14 +1003,16 @@ async function updateMeasurements() {
     }
 
 
-    const data = await getJson(
-        apiUrl(
-            "/api/measurements",
-            {
-                limit: HISTORY_LIMIT
-            }
-        )
-    );
+    const data =
+        await getJson(
+            apiUrl(
+                "/api/measurements",
+                {
+                    limit:
+                        HISTORY_LIMIT
+                }
+            )
+        );
 
 
     const measurements =
@@ -689,21 +1023,156 @@ async function updateMeasurements() {
         measurements.map(
             measurement =>
                 formatTime(
-                    measurement.received_at
+                    measurement
+                        .received_at
                 )
         );
 
 
-    updateChart(
-        rttChart,
-        labels,
+    /*
+     * ============================================================
+     * Rolling latency percentiles
+     * ============================================================
+     */
+
+    const rollingP95 =
+        calculateRollingPercentile(
+            measurements,
+            95
+        );
+
+
+    const rollingP99 =
+        calculateRollingPercentile(
+            measurements,
+            99
+        );
+
+
+    /*
+     * Current P95/P99 values are simply the final values
+     * in the rolling arrays.
+     */
+
+    const currentP95 =
+        rollingP95.length > 0
+            ? rollingP95[
+                rollingP95.length - 1
+            ]
+            : null;
+
+
+    const currentP99 =
+        rollingP99.length > 0
+            ? rollingP99[
+                rollingP99.length - 1
+            ]
+            : null;
+
+
+    setText(
+        "p95Value",
+        formatMs(
+            currentP95
+        )
+    );
+
+
+    setText(
+        "p99Value",
+        formatMs(
+            currentP99
+        )
+    );
+
+
+    /*
+     * Count the valid RTT samples currently available
+     * inside the rolling window.
+     */
+
+    const recentMeasurements =
+        measurements.slice(
+            -ROLLING_LATENCY_WINDOW
+        );
+
+
+    const validRecentRtts =
+        recentMeasurements.filter(
+            measurement =>
+                measurement
+                    .internet_rtt_ms !== null
+                &&
+                measurement
+                    .internet_rtt_ms !== undefined
+                &&
+                Number(
+                    measurement
+                        .internet_rtt_ms
+                ) >= 0
+        );
+
+
+    setText(
+        "p95Detail",
+        (
+            `${validRecentRtts.length}/`
+            +
+            `${ROLLING_LATENCY_WINDOW} `
+            +
+            `valid recent samples`
+        )
+    );
+
+
+    setText(
+        "p99Detail",
+        (
+            `${validRecentRtts.length}/`
+            +
+            `${ROLLING_LATENCY_WINDOW} `
+            +
+            `valid recent samples`
+        )
+    );
+
+
+    /*
+     * ============================================================
+     * Internet RTT + P95 + P99
+     * ============================================================
+     */
+
+    rttChart.data.labels =
+        labels;
+
+
+    rttChart.data.datasets[0].data =
         measurements.map(
             measurement =>
                 measurement
                     .internet_rtt_ms
-        )
+        );
+
+
+    rttChart.data.datasets[1].data =
+        rollingP95;
+
+
+    rttChart.data.datasets[2].data =
+        rollingP99;
+
+
+    rttChart.update(
+        "none"
     );
 
+
+    /*
+     * ============================================================
+     * Other graphs
+     * ============================================================
+     */
 
     updateChart(
         dnsLatencyChart,
@@ -721,7 +1190,8 @@ async function updateMeasurements() {
         labels,
         measurements.map(
             measurement =>
-                measurement.rssi_dbm
+                measurement
+                    .rssi_dbm
         )
     );
 
@@ -731,7 +1201,8 @@ async function updateMeasurements() {
         labels,
         measurements.map(
             measurement =>
-                measurement.jitter_ms
+                measurement
+                    .jitter_ms
         )
     );
 
@@ -750,7 +1221,7 @@ async function updateMeasurements() {
 
 /*
  * ================================================================
- * Event filters
+ * Event types
  * ================================================================
  */
 
@@ -760,11 +1231,12 @@ async function updateEventTypes() {
     }
 
 
-    const data = await getJson(
-        apiUrl(
-            "/api/event-types"
-        )
-    );
+    const data =
+        await getJson(
+            apiUrl(
+                "/api/event-types"
+            )
+        );
 
 
     const types =
@@ -785,17 +1257,23 @@ async function updateEventTypes() {
         '<option value="">All event types</option>';
 
 
-    for (const type of types) {
+    for (
+        const type
+        of types
+    ) {
         const option =
             document.createElement(
                 "option"
             );
 
+
         option.value =
             type;
 
+
         option.textContent =
             type;
+
 
         selector.appendChild(
             option
@@ -814,16 +1292,15 @@ async function updateEventTypes() {
 
 /*
  * ================================================================
- * Event log
+ * Events
  * ================================================================
  */
 
-function formatEventDetails(
-    details
-) {
+function formatEventDetails(details) {
     if (
         !details ||
-        Object.keys(details).length === 0
+        Object.keys(details)
+            .length === 0
     ) {
         return "";
     }
@@ -845,7 +1322,8 @@ function formatEventDetails(
             )
     ) {
         return (
-            `${details.old} → ` +
+            `${details.old} → `
+            +
             `${details.new}`
         );
     }
@@ -856,7 +1334,8 @@ function formatEventDetails(
         details.value !== undefined
     ) {
         let output =
-            `${details.metric}: ` +
+            `${details.metric}: `
+            +
             `${details.value}`;
 
 
@@ -865,7 +1344,8 @@ function formatEventDetails(
             undefined
         ) {
             output +=
-                ` (threshold: ` +
+                ` (threshold: `
+                +
                 `${details.threshold})`;
         }
 
@@ -913,21 +1393,22 @@ async function updateEvents() {
         ).value;
 
 
-    const data = await getJson(
-        apiUrl(
-            "/api/events",
-            {
-                limit:
-                    EVENT_LIMIT,
+    const data =
+        await getJson(
+            apiUrl(
+                "/api/events",
+                {
+                    limit:
+                        EVENT_LIMIT,
 
-                severity:
-                    severity,
+                    severity:
+                        severity,
 
-                event_type:
-                    eventType,
-            }
-        )
-    );
+                    event_type:
+                        eventType,
+                }
+            )
+        );
 
 
     const events =
@@ -1040,7 +1521,7 @@ async function updateEvents() {
             timeCell,
             severityCell,
             eventCell,
-            detailsCell,
+            detailsCell
         );
 
 
@@ -1074,7 +1555,8 @@ async function refreshDashboard() {
         setText(
             "lastUpdated",
             (
-                "Last updated: " +
+                "Last updated: "
+                +
                 new Date()
                     .toLocaleTimeString()
             )
@@ -1102,7 +1584,7 @@ async function refreshDashboard() {
 
 /*
  * ================================================================
- * Event listeners
+ * Listeners
  * ================================================================
  */
 
@@ -1156,18 +1638,12 @@ async function startDashboard() {
         await refreshDashboard();
 
 
-        /*
-         * Live measurements.
-         */
         setInterval(
             refreshDashboard,
             POLL_INTERVAL_MS
         );
 
 
-        /*
-         * Devices may appear later.
-         */
         setInterval(
             async () => {
                 try {
@@ -1183,10 +1659,6 @@ async function startDashboard() {
         );
 
 
-        /*
-         * Newly created event types should
-         * automatically enter the filter.
-         */
         setInterval(
             async () => {
                 try {

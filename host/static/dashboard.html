@@ -49,7 +49,6 @@
 
         .container {
             max-width: 1500px;
-
             margin: 0 auto;
             padding: 24px;
         }
@@ -59,20 +58,17 @@
             justify-content: space-between;
             align-items: flex-start;
             gap: 20px;
-
             margin-bottom: 24px;
         }
 
         h1 {
             margin: 0;
-
             font-size: 28px;
             letter-spacing: -0.5px;
         }
 
         .subtitle {
             margin-top: 6px;
-
             color: var(--muted);
         }
 
@@ -136,7 +132,6 @@
                 );
 
             gap: 14px;
-
             margin-bottom: 20px;
         }
 
@@ -147,7 +142,6 @@
             border-radius: 12px;
 
             padding: 16px;
-
             min-height: 116px;
         }
 
@@ -201,7 +195,6 @@
                 );
 
             gap: 16px;
-
             margin-bottom: 24px;
         }
 
@@ -220,13 +213,11 @@
 
         .chart-header h2 {
             margin: 0;
-
             font-size: 17px;
         }
 
         .chart-subtitle {
             margin-top: 5px;
-
             color: var(--muted);
             font-size: 12px;
         }
@@ -257,7 +248,6 @@
 
         .event-header h2 {
             margin: 0;
-
             font-size: 18px;
         }
 
@@ -273,7 +263,6 @@
 
         table {
             width: 100%;
-
             border-collapse: collapse;
         }
 
@@ -331,9 +320,7 @@
             color: var(--red);
         }
 
-        @media (
-            max-width: 800px
-        ) {
+        @media (max-width: 800px) {
             header {
                 flex-direction: column;
             }
@@ -406,9 +393,7 @@
     </header>
 
 
-    <!-- =======================================================
-         Current measurements
-         ======================================================= -->
+    <!-- Current measurements -->
 
     <section class="metric-grid">
 
@@ -466,10 +451,7 @@
                 --
             </div>
 
-            <div
-                class="metric-subvalue"
-                id="rssiDetail"
-            >
+            <div class="metric-subvalue">
                 RSSI
             </div>
         </div>
@@ -492,6 +474,52 @@
                 id="rttStats"
             >
                 Min -- / Avg -- / Max --
+            </div>
+        </div>
+
+
+        <!-- NEW: rolling P95 -->
+
+        <div class="metric-card">
+            <div class="metric-label">
+                Rolling P95 RTT
+            </div>
+
+            <div
+                class="metric-value"
+                id="p95Value"
+            >
+                --
+            </div>
+
+            <div
+                class="metric-subvalue"
+                id="p95Detail"
+            >
+                Last 60 samples
+            </div>
+        </div>
+
+
+        <!-- NEW: rolling P99 -->
+
+        <div class="metric-card">
+            <div class="metric-label">
+                Rolling P99 RTT
+            </div>
+
+            <div
+                class="metric-value"
+                id="p99Value"
+            >
+                --
+            </div>
+
+            <div
+                class="metric-subvalue"
+                id="p99Detail"
+            >
+                Last 60 samples
             </div>
         </div>
 
@@ -628,9 +656,7 @@
     </section>
 
 
-    <!-- =======================================================
-         Graphs
-         ======================================================= -->
+    <!-- Graphs -->
 
     <section class="chart-grid">
 
@@ -639,7 +665,7 @@
                 <h2>Internet RTT</h2>
 
                 <div class="chart-subtitle">
-                    Internet round-trip latency
+                    RTT with rolling P95 and P99 latency
                 </div>
             </div>
 
@@ -714,9 +740,7 @@
     </section>
 
 
-    <!-- =======================================================
-         Event log
-         ======================================================= -->
+    <!-- Event log -->
 
     <section class="event-panel">
 
